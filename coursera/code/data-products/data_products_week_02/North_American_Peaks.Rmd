@@ -1,0 +1,136 @@
+---
+title: 'Data Products Week 2: North American Peaks'
+author: "R. A. Reitmeyer"
+date: "February 16, 2017"
+output: ioslides_presentation
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+## Overview
+
+This is a simple presentation of North American Mountain Peaks
+in a leaflet map. It was created February 16, 2017 for the 
+week 2 project of the "Data Products" coursera course.
+
+
+## Data Source
+
+Data comes from a wikipedia:
+[https://en.wikipedia.org/wiki/Table_of_the_highest_major_summits_of_North_America]
+
+A local copy of this page was saved 2017-02-16 to insure consistency.
+
+Using the KML file would have been much easier, but the KML lacks the elevation,
+prominance and isolation information.
+
+## Data Processing
+
+Data was extracted from the main table in the HTML page and parsed.
+
+```{r}
+library(XML)
+library(stringr)
+
+tree <- htmlParse('./en.wikipedia.org_wiki_Table_of_the_highest_major_summits_of_North_America.html')
+data <- do.call(rbind, 
+    xpathApply(tree, '/html/body//table[@class="wikitable sortable"]/tr',
+        function(tr) {
+            tds<-getNodeSet(tr, "./td")
+            l <- length(tds)
+            if (l > 7) { 
+                data.frame(
+                    raw_name=xmlValue(tds[[l-6]]), 
+                    region=xmlValue(tds[[l-5]]), 
+                    range=xmlValue(tds[[l-4]]), 
+                    raw_elevation=xmlValue(tds[[l-3]], recursive=F),
+                    raw_prominance=xmlValue(tds[[l-2]], recursive=F),
+                    raw_isolation=xmlValue(tds[[l-1]], recursive=F),
+                    raw_coords=xmlValue(tds[[l]]),
+                    stringsAsFactors=FALSE)
+                } 
+            }))
+data$name <- sapply(strsplit(data$raw_name, '[\n[]'), function(l){l[[1]]})
+two_unit_col_to_numeric <- function(data, raw_colname) {
+    as_str <- stringr::str_match(stringr::str_replace_all(data[,raw_colname], ',', ''), '([0-9.]+)\\W([a-zA-Z]+)\\n([0-9.]+)\\W+([a-zA-Z]+)')
+    v1 <- as.numeric(as_str[,2])
+    u1 <- levels(as.factor(as_str[,3]))
+    v2 <- as.numeric(as_str[,4])
+    u2 <- levels(as.factor(as_str[,5]))
+    stopifnot(length(u1)==1)
+    stopifnot(length(u2)==1)
+    colname <- stringr::str_replace(raw_colname, '^raw_', '')
+    data[,sprintf("%s_%s", colname, u1[[1]])] <- v1
+    data[,sprintf("%s_%s", colname, u2[[1]])] <- v2
+    return(data)
+}
+data <- two_unit_col_to_numeric(data, 'raw_elevation')
+data <- two_unit_col_to_numeric(data, 'raw_prominance')
+data <- two_unit_col_to_numeric(data, 'raw_isolation')
+data$lat <- as.numeric(stringr::str_match(data$raw_coords, '/ ([-0-9.]+);')[,2])
+data$lng <- as.numeric(stringr::str_match(data$raw_coords, ';\\W([-0-9.]+)')[,2])
+```
+
+## Map 1: Peaks, showing isolation
+
+Here are the peaks, with circles representing isolation (distance to nearest 
+higher peak).  Ideally, the circle for each peak is exactly big enough to just
+touch the nearest peak with higher elevation. In practice, the Mercator 
+projection used by default does not preserve distances, especially at continent scale.
+
+
+```{r, fig.height=4, fig.width=6}
+library(leaflet)
+
+map <- leaflet() %>%
+    addTiles() %>%
+    addCircles(lat=data$lat, lng=data$lng, weight=1, radius=data$isolation_km*1000) %>%
+    addMarkers(lat=data$lat, lng=data$lng, popup=sprintf("%s, %0.0f m", data$name, data$elevation_m))
+map
+```
+
+
+## Replacing Mercator, step 1:
+
+It should be possible to ask modern version of leaflet to reproject to
+an azimuthal equaldistant projection, which would preserve distances. 
+Something like "+proj=aeqd +lat_0=45 +lon_0=-105" should be fine.
+(See [https://bhaskarvk.github.io/leaflet/projections.html].)
+
+However, leaflet will expect tiles to be in the new projection, and
+there are no azimuthal equadistant tiles handy. 
+
+Without an underlying map it is difficult to see where things are, however.
+
+So the next map uses a vector world map available from [https://d3js.org/world-110m.v1.json], 
+as a TopoJSON file. (dowloaded 2017-02-16.) 
+
+## Map 2: No tiles
+
+This is still in Mercator projection, but tiles have been replaced
+by a vector world map. Note that leaflet does not handle
+lines that cross +/- 180 degrees of longitude correctly.
+
+```{r, fig.height=4, fig.width=6}
+fp <- file('world-110m.v1.json')
+tj <- readLines(fp)
+close(fp)
+
+map2 <- leaflet() %>%
+    addTopoJSON(tj, layerId='land', color='black', weight=1) %>%
+    addCircles(lat=data$lat, lng=data$lng, weight=1, radius=data$isolation_km*1000) %>%
+    addMarkers(lat=data$lat, lng=data$lng, popup=sprintf("%s, %0.0f m", data$name, data$elevation_m))
+map2
+```
+
+## Map 3
+
+There is no map 3, unfortuntely.
+
+Reprojection requires 1.1, which is not available yet. The R repos
+still have 1.0.1: [https://cran.r-project.org/web/packages/leaflet/index.html]
+
+
+

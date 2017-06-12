@@ -1,0 +1,143 @@
+# Reproduceable Research Week 3
+
+
+## Communicating
+
+There's a hierarchy of information. 
+
+Most people are very busy, and do not have a lot of time.
+
+Early results are often in email. Don't blast a ton of info in one email.
+
+Think about the hierarcy of detail in a research paper:
+* title/author
+* an abstract, 
+* the body/results,
+* the supplementary materials with gory details, 
+* The code, data, and really gory details
+
+If you are emailing someone, you have a subject line. Can you
+summarize in one sentence?
+
+The email body should have a one or two paragraph summary.
+* what was problem / context
+* recall what was proposed
+* supply results
+
+If there's a need to take action, recommend some options
+
+If questions need answered, make them as simple as possible, ideally yes / no.
+
+Use attachments for extra details, but still should stay concise.
+
+Attach the markdown file and/or knitr output.
+
+Don't share code; at most send a link to the code / repo.
+
+
+## RPubs
+
+Rstudio has created an RPubs website that you can use to share
+Rmarkdown documents with the public. Just create an account. Totally
+free, but public.
+
+When you make a Rmarkdown document in Rstudio, there will be a publish
+link on the previewer. That will bring up a not about RPubs and step
+you through publishing.
+
+
+## Checklist
+
+* Do start with good science.
+    * Garbage in, garbage out
+    * Starting with a coherent, focused question will simplify many problems
+    * working with good collaborators will reenforce good practices
+    * working on something interesting will help motivate some good habits
+* Don't do things by hand
+    * Don't fix things in a spreadsheet
+    * Don't edit tables or figures
+    * don't download data from a website by clicking browser links --- 
+        script it to make sure someone else could find the same link
+    * don't move stuff around on your computer
+    * don't assume you're only going to do something once
+* Things done by hand must be PRECISELY documented, which is harder
+    than it sounds.
+* Don't use point and click software. GUIs are convenient, but difficult to
+    reproduce
+* Do script things: automate everything you can.
+    * If you can teach a computer to do it, then you can 
+        concretely document it.
+    * Almost guarantees reproduceability
+* Do use version control
+    * check in incremental changes, not a massive dump, so you can go back
+* Do keep track of your software environment
+    * OS, computer architecture (CPU & GPU)
+    * Software toolchain (EG, R, database)
+    * libraries in software tools (EG, R packages) and versions
+    * external dependencies, like external web sites
+    * version numbers
+    * R has a sessionInfo() function. That's really handy.
+* Don't save output
+    * if a stray output file cannot be connected to where it came 
+        from, it's not reproduceable.
+    * save the code
+    * automated caching is OK
+* Do set the random number seed explicitly to be reproduceable.
+* Do think about the whole pipeline, not just the final output
+    * raw data to processed data to analysis to reports.
+    * make sure each step is reproduceable
+
+## Evidence based data analysis
+
+Replication is important to validate claims. Gold standard. Can we
+trust the result?
+
+Reproduceability is focused just on the data analysis: can we trust
+the analysis? Important when it's hard or impossible to reproduce.
+
+Even basic analysis can be very difficult to describe these days.
+Complex analyses cannot always just be trusted, because longer
+pipelines have many places for errors to creep in.
+
+Reproduceability improves transparency and transfer of knowledge.
+
+Reproduceability does not automatically validate an analysis: you can
+run buggy / incorrect software and see the same bug / incorrect answer.
+
+The premise is that reproduceability is that people can check analysis.
+
+Only happens post-publication, though, and long term might be "too
+long."
+
+There is discussion if peer review should include reproduceable
+review; Dr Peng thinks that would add yet more delay, and he'd
+prefer to move further ahead in the process.
+
+In Biostatics, you can get a little tag, D for Data, C for Code, D+C
+for both, and R for reproduceable. Trying to encourage voluntary focus
+on reproduceable.
+
+Who reproduces? what are their goals?
+
+Three groups:
+* Public, who doesn't care
+* scientists who agree or disagree
+* opponents who want to disagree
+
+Dr Peng thinks the opponents group is sometimes most motivated to
+reproduce.
+
+Reproduceability brings transparency, but he worries that secondary
+analysis can be colored by interest/motivations of others.
+
+
+## Evidence based data analysis
+
+* Many analysis involve stringing together many methods.
+* Often methods are standard for a given field.
+* We should apply thoroughly-studied methods.
+* There should be evidence to justify the application of a method
+
+Dr. Peng thinks we should have an evidence based pipeline that gets
+established, and not messed with. Goal is to reduce "researcher
+degrees of freedom."

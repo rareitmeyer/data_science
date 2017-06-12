@@ -1,0 +1,71 @@
+Supervised learning: have right answers.
+Regression: continuous value outputs.
+Classification: discrete value outputs.
+Unsupervised: clustering. Google news example. Cocktail party problem.
+
+Could plot tumors as 0/1, or as different shapes
+for different outcomes, right on same axis.
+
+Infinite number of features?
+
+A support vector machines can handle infinite number of features,
+via mathematical trick.
+
+Audio separation (coktail party example) is solved by
+   [W,s,v] = svd((repmat(sum(x.*x,1),size(x,1),1).*x)*x');
+
+Course will use octave.
+
+Notation:
+    m = number of training data set examples
+    x = input variable(s) or features
+    y = output or target variables
+    (x,y) = a single example (single row)
+    x^(i),y^(i)) = specifically the ith row. Here i is not an exponent!
+        Octave, and this class, uses one based indexing.
+    h = hypothisis function (takes input, produces estimate).
+
+"Hypothisis" name standardized in machine learning early.
+
+Representing of h for linear regression (with one variable):
+h_{\theta}(x) = theta_0 + theta_1 x
+
+
+Cost function, objective function.
+
+View regression as a minimization problem on theta_0 and theta_1.
+
+Minimize sum of squares of error: \Sigma_{i=1}^{m}(h(x)-y)^2
+Adjusted by multiplying by 1/(2m). The two just makes the math easier.
+
+Cost function is J(theta_0, theta_1) = 1/(2m) sum((error)^2)
+
+Squared error is most common cost function in regression, but
+others can be used too.
+
+Gradient descent.
+
+    theta_j := theta_j
+             - alpha * partial with respect to theta_j of J(theta)
+    for j = 0 and j = 1
+
+    := is assignment
+    = is assertion
+
+The way to do the assignment correctly is to assign the new thetas at
+the same time: don't set theta_0 and use the new value to compute
+theta_1. This typically requires temp variables.
+
+Here alpha is the "learning rate" -- which controls step size.
+
+after parials:
+
+theta_0 := theta_0 - alpha*1/m*sum(h_theta(x^(i)) - y^(i))
+theta_1 := theta_1 - alpha*1/m*sum((h_theta(x^(i)) - y^(i))*x^(i))
+
+J for a linar regression is always a "convex function" (bowl-shaped),
+so there is only a single local (and hence global) optimim.
+
+Batch gradient descent: uses ALL of the points to compute the sums.
+
+

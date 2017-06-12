@@ -1,0 +1,78 @@
+There is a web-facing copy of MySQL at http://genome.ucsc.edu
+
+dbConnect(MySQL(), user="genome", host="genome-mysql.csv.ucsc.edu")
+
+The db commands are dbGetQuery(), dbReadTable(), and
+dbDisconnect(). Use fetch() and dbClearResult() to work with cursors.
+
+Use 'show databases' to get a list of all the DBs. Use
+dbListTables or perhaps 'show tables' once connected within a DB to
+look at tables.
+
+They're interested in db='hg19' in the lecture. Has 10k tables.
+
+They emphasize the importance of closing the connection.
+
+ ====
+
+HDF is hierarchal format. There's groups (header, symbol table) and
+also datasets (header, data array).
+
+Packages is rhdf5, which comes from bioconductor.
+
+Create a h5 file with h5createFile(<filename>)
+
+Once you have a file, use hd5createGroup(<filename>, <group>) to make
+groups. List with h5ls(<filename>).
+
+Write data with h5write(data, <file>, <group>)
+
+h5write can also take a data frame and variable name instead of group
+name to store at top.
+
+Read data from h5read(<filename>, <groupname>)
+
+Groups take unix style slashes for nesting.
+
+Can use index= arg to write or read just some of the
+elements/dimensions in a bigger matrix.
+
+   =============
+
+Open web connections with conn <- url(...) and readLines(conn).
+
+Reminder: there's a XML package that has htmlTreeParse that might
+be more fun. Remember xpathSApply() for processing.
+
+There's also a httr package with a (captial) GET and htmlParse.
+
+If the page needs a username / password, httr is a better approach
+because it has an authenticate function.
+
+If you want to carry over cookies, use httr::handle to create a
+session and then pass the handle to GET to get each page.
+
+
+  =============
+
+Web APIs often require a developer account.
+
+And you'll often get OAuth credentials.
+
+httr will allow use of OAuth via httr::oauth_app() to create an app,
+and httr::sign_oath1.0(app, token, token_secret) to make a signature.
+That sgnature will become part of the httr::GET call.
+
+Can access content via httr::content.
+
+Interpret JSON with jsonlite::fromJSON.
+
+
+  ==============
+
+The foreign package will help import from Stata or Octave or whatever.
+
+Can read images with jpg / readbitmap / png packages.
+
+Can use tuneR or seewave to read audio data like MP3.
+

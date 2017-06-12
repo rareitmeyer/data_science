@@ -1,0 +1,91 @@
+---
+title: 'Data Products Week 3: North American Peaks'
+author: "R. A. Reitmeyer"
+date: "February 26, 2017"
+output: ioslides_presentation
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+## Overview
+
+This is a simple presentation of North American Mountain Peaks
+in a plotly interactive graph. It was created February 26, 2017 
+for the week 3 project of the "Data Products" coursera course.
+
+The purpose of the plot is to illustrate the relationship between
+peak isloation (distance to nearest-higher peak) and prominance 
+(height above lowest point connecting to nearest-higher peak).
+
+
+## Data Source
+
+Data comes from a wikipedia:
+[https://en.wikipedia.org/wiki/Table_of_the_highest_major_summits_of_North_America]
+
+Using the KML file would have been much easier, but the KML lacks the elevation,
+prominance and isolation information.
+
+## Data Processing
+
+Data was extracted from the main table in the HTML page and parsed.
+
+```{r}
+library(XML)
+library(stringr)
+
+tree <- htmlParse('./en.wikipedia.org_wiki_Table_of_the_highest_major_summits_of_North_America.html')
+data <- do.call(rbind, 
+    xpathApply(tree, '/html/body//table[@class="wikitable sortable"]/tr',
+        function(tr) {
+            tds<-getNodeSet(tr, "./td")
+            l <- length(tds)
+            if (l > 7) { 
+                data.frame(
+                    raw_name=xmlValue(tds[[l-6]]), 
+                    region=xmlValue(tds[[l-5]]), 
+                    range=xmlValue(tds[[l-4]]), 
+                    raw_elevation=xmlValue(tds[[l-3]], recursive=F),
+                    raw_prominance=xmlValue(tds[[l-2]], recursive=F),
+                    raw_isolation=xmlValue(tds[[l-1]], recursive=F),
+                    raw_coords=xmlValue(tds[[l]]),
+                    stringsAsFactors=FALSE)
+                } 
+            }))
+data$name <- sapply(strsplit(data$raw_name, '[\n[]'), function(l){l[[1]]})
+two_unit_col_to_numeric <- function(data, raw_colname) {
+    as_str <- stringr::str_match(stringr::str_replace_all(data[,raw_colname], ',', ''), '([0-9.]+)\\W([a-zA-Z]+)\\n([0-9.]+)\\W+([a-zA-Z]+)')
+    v1 <- as.numeric(as_str[,2])
+    u1 <- levels(as.factor(as_str[,3]))
+    v2 <- as.numeric(as_str[,4])
+    u2 <- levels(as.factor(as_str[,5]))
+    stopifnot(length(u1)==1)
+    stopifnot(length(u2)==1)
+    colname <- stringr::str_replace(raw_colname, '^raw_', '')
+    data[,sprintf("%s_%s", colname, u1[[1]])] <- v1
+    data[,sprintf("%s_%s", colname, u2[[1]])] <- v2
+    return(data)
+}
+data <- two_unit_col_to_numeric(data, 'raw_elevation')
+data <- two_unit_col_to_numeric(data, 'raw_prominance')
+data <- two_unit_col_to_numeric(data, 'raw_isolation')
+data$lat <- as.numeric(stringr::str_match(data$raw_coords, '/ ([-0-9.]+);')[,2])
+data$lng <- as.numeric(stringr::str_match(data$raw_coords, ';\\W([-0-9.]+)')[,2])
+```
+
+## Interactive Plot
+
+
+```{r, fig.height=3.5, fig.width=5}
+library(ggplot2, verbose=FALSE, warn.conflicts=FALSE, quietly=TRUE)
+library(plotly, verbose=FALSE, warn.conflicts=FALSE, quietly=TRUE)
+
+p <- qplot(prominance_m, isolation_km, data=data)+
+    scale_x_log10(breaks=c(250,500,750,1000,1500,2000,4000,6000))+
+    scale_y_log10(breaks=c(1, 5, 20, 50, 250, 1000, 2000, 5000))
+ggplotly(p)
+```
+
+

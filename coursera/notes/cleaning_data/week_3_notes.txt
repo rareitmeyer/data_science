@@ -1,0 +1,70 @@
+Can use logical test when indexing a data frame.
+If the column in the logical test has NAs, that's bad.
+In that case, use which.
+
+When sorting, remember there'a a parameter to control
+where NAs go.
+
+In plyr, you can use plyr::arrange(X, colname) to quickly
+sort data frame X by colname.
+
+ ===============
+
+Open baltimore resturant data: https://data.baltimorecity.giv/Community/Resturants
+
+The table command requires useNA='ifAny' to avoid suppressing
+NA values.
+
+For flat tables, use ftable().
+
+To see the size of an object, use object.size(obj)
+
+
+ ==============
+
+Reminder: seq() makes a sequence. Either use (from, to, by) or (from, to, length).
+
+Reminder: Can use cut() to break continuous variables into factors.
+
+The Hmisc::cut2 function is an even easier way to do cut.
+
+The stats::relevel command can re-order a factors levels to move a single
+level to the front, useful for contrasts.
+
+The plyr::mutate function is another way to add columns.
+
+
+
+ =================
+
+Tidy data principles: 
+1. every variable in a column
+2. every observation in a row
+3. every table stores data about one kind of observation.
+
+Recommend reshape2 for reshaping. Do the melt step, then the cast.
+
+dcast(melted, rows ~ columns, summary_fn)
+
+
+ =================
+
+dplyr::arrange, sorts. Use desc(var) for descending.
+
+dplyr::filter
+
+dplyr::select --- can do select(data, colname:othercolname) or -colname:colname.
+
+dplyr::mutate
+
+dplyr::rename --- renames variables without names() and grep.
+
+
+ =================
+
+
+
+
+
+
+

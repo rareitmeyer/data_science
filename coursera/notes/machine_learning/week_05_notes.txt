@@ -1,0 +1,213 @@
+Netural Network: how to fit.
+
+Cost function.
+
+Notation:
+* Capital L is total number of layers, including input and output.
+* s_l is the number of units, not counting the bias unit, in layer l.
+
+In binary classification we have one output unit.
+
+In mutli-class classification, we have K output units for K classes.
+
+In mutli-class classfication, hypotheses are K-dimentsional output vectors.
+
+If you only have two classes, use binary classification.
+
+In logistic (regularized) regression, we had cost function J(theta) of
+
+    J(theta) = -1/m*(\sum_i=1^m(y^(i)*log(h_theta(x^(i))+(1-y^(i))*log(1-h_theta(X^i))))) + lambda/2/m*sum_j=1^n(theta_j^2)
+
+Remember, we don't include theta_0 in the regularization.
+
+Generalize this to K output units.
+
+    J(Theta) = -1/m*(\sum_i=1^m(\sum_k=1^K(y_k^(i)*log(h_theta(x^(i)_k)+(1-y_k^(i))*log(1-h_theta(X^i)_k)))) + lambda/2/m*\sum_l=1^L01(\sum_i=1^s_l(\sum_j=1^n(theta_j^2)))
+
+Remember that h_Theta(x) is a K dimensional vector, so for notation,
+write (h_Theta(x))_i is the ith output.  And y_k is the vector of
+[0;0;1;0] or whatever that denotes what class each instance is in.
+And also remember Theta _j_i^(l) is the term for the ith data point
+on the jth neuron-activation in the lth layer. Or possibly it's Theta_i_j^(l);
+notes in cost function slides show both.
+
+When doing the sums for the regularization, remember not to include the
+bias terms.
+
+
+ ================================================================
+
+Back propagation.
+
+We need J(Theta) and the partial derivatives.
+
+Remember that in forward propagation, we had inputs to each neuron as
+'activations', where activations at the input layer were the inputs,
+and inputs to each subsequent layer were z^(l+1) = Theta^(l)*a^(l);
+a^(l+1) = g(x^(l+1)). Don't forget bias terms a_0.
+
+Final activation is the output.
+
+For back propagation, we want delta_j^(l) --- the error in node j
+of layer l.
+
+For the final layer in the example,
+
+    delta_j^(4) = a_j^(4) - y_j
+
+So the final layer is just the hypothesis - actual.
+
+As vectors, think of delta^(4) - a^(4)-y
+
+Now apply similar logic to prior layers, but instead of deltas being
+'errors', they are partial derivitives with respect to z for each
+layer, showing the change in cost function with respect to z.
+Can think of it as weighted errors from subsequent layers, with weights
+being theta terms.
+
+    delta^(3) = Theta^(3)'delta^(4) .* d/dtheta g(z^(3))
+
+where .* is the per-item multiplication and d/dtheta g(z^(3)) is the
+partials of g with respect to theta at values of z in layer three.
+
+    d/dtheta g(z^(3)) = a^(3) .* (1-a^(3))
+
+Simiarly for delta 2.
+
+    delta^(2) = Theta^(2)'delta^(3) .* d/dtheta g(z^(2))
+
+There is no delta 1 layer; no error associated with that.
+
+The partical derivative terms we want, ignoring regularization, are
+given by
+
+    d/dTheta_ij^(l) J(Theta) = a_j^(l) delta_i^(l+1) # again, ignorning regularization
+
+Here a_j are the vectors of inputs to each level j, and the delta_i
+terms are the errors for instance i.
+
+Algorithm:
+    Delta_ij^(l) = 0   # for all values of i,j,l --- delta as matrix for layer l
+    for i = 1:m
+        set a^(l) = x(i)  # activations of 1st layer
+        # perform forward propagations to get all the way to final outputs
+        ...
+        # use final outputs to produce errors on last layer, delta^(L) = a^(L)-y^(i)
+        ...
+        # use back propagation to compute earlier deltas, remembering there is
+        # no delta^(1) because no error on inputs.
+        ...
+        # finally, accumulate Delta
+        Delta_jk^(l) := Delta_ij^(l) + a_j^(l)*delta_i^(l+1)
+
+        # note that as vector, Delta^(l) = Delta^(l)+delta^(l+1)*(a^(l))'
+
+    if j != 0
+        D_ij^(l) := 1/m*Delta_ij^(l) + lambda*Theta_ij^(l)
+    else
+        D_ij^(l) := 1/m*Delta_ij^(l)
+
+    # ... since j = 0 is the bias terms.
+
+
+# Unrolling parameters
+
+Optimization routines assume VECTORs. So we need to unroll matricies
+like Theta1, Theta2, Theta3 into vectors, and the D matries too.
+
+suppose you have s1 = 10 (input layer with 10 neurons), s2 = 10, s3 = 1
+(one output). Then the dimensions of Theta^(1) are 10x11 (bias unit),
+Theta^(2) is 10x11, and Theta^(3) is 1x11. D matricies have same shapes.
+
+In Octave, thetaVec = [ Theta1(:); Theta2(:), Theta3(:) ]; will do the
+unrolling into a vector.
+
+To recreate theta1, use
+
+    Theta1 = reshape(thetaVec(1:110, 10, 11)) # use 1:110 to pick first elems
+    Theta2 = reshape(thetaVec(111:220, 10, 11))   #
+    Theta3 = reshape(thetaVec(221:231, 10, 11))   # etc.
+
+So unroll Thetas into an initialTheta, and in the cost function reshape
+to compute Theta matricies. Figure out D matricies, then unroll Ds to
+create the gradientVec.
+
+
+## Checking gradient descent
+
+Subtle bugs if gradients are wrong. If you implement checking it
+will eliminate all errors.
+
+numerical derivitive is (J(theta+eps) - J(theta-eps))/2/eps
+use eps of ~ 10^-4 to avoid numeric problems from too-small eps.
+
+Using two sided difference is usually a bit more accurate than the
+one-sided form.
+
+So compute gradApprox to check gradients.
+
+If theta is a vector, partial with respect to element i is
+
+    epsvec = zeros(size(theta))
+    epsvec(i,1) = eps
+    gradApprox = (J(theta + epsvec) - J(theta-epsvec))/2/eps
+
+Check that gradApprox ~ Dvec, in the sense of
+   abs(gradApprox - Dvec) < small
+
+Use gradient checking for testing. Don't leave it on permanently,
+as your code will run slowly.
+
+
+## Random initialization
+
+We need inital values.
+
+Initializing all parameters to zero won't work in a neural network.
+All the values at the neurons come out the same, and deltas are the
+same, so all nodes in a layer will remain the same, which defeats the
+purpose of having more than one neuron in a layer.
+
+So initialize parameters to random numbers to perform 'symmetry
+breaking'
+
+    Theta1 = rand(10,11)*(2*INIT)-INIT;
+
+Use small values of INIT.
+
+
+## Putting it together
+
+Architecture: input units is number of features. Output units in
+classification is number of classes.
+
+Remember each y becomes a vector of zeros, and one one, in
+mutli-classification.
+
+By default, start with a single hidden layer. If using more than
+one hidden layer, use the same number of hidden units (neurons) in
+each layer. More hidden units per layer is often better.
+
+Number of hidden units in a layer is often comperable to the number of
+input units, or a small multiple (say 2x or 3x).
+
+STEPS
+* Set up neural network, initialize weights to small values near zero
+* Create forward propagation code to get h_Theta(x^(i)) for any x^(i).
+* Create code for cost function J(theta)
+* Create back propagation code for partial derivatives
+
+   - Expect to have a for loop over each example row in your data for
+     forward / back prop.
+
+* Use gradient checking to check back propagation gradients. Once checked,
+  disable.
+* Use gradient descent or optimization method to minimize J(Theta).
+
+
+NOTE: J(Theta) is NOT CONVEX for a neural network. It's possible to find
+a local minimum that is not the global minimum. But usually even a local
+minimum is pretty good.
+
+
+

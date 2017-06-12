@@ -1,0 +1,54 @@
+Feature scaling. Makes gradient descent run faster and converge faster.
+
+Avoid very narrow cost function contour plots.
+
+Try to get features to similar scales. Say -1..+1.
+Prof Ng's rule of thumb is -3...3 or -1/3...1/3 OK, broader
+less comfortable.
+
+Mean normalization, too.
+
+Perhaps x <- (x - mean(x)) / (max(x)-min(x))
+or use stddev.
+
+
+Suggestions for choosing alpha:
+
+Plot cost function J(theta) vs number of iterations.
+
+When cost is function is flat, you have converged.
+
+Auto convergence test: is cost function J(theta) decreases by a small
+value, say 10e^-3, then converged. But picking the small value
+is hard, so Prof Ng likes to look at plots.
+
+Plots also show divergence if that's a problem. So plot pretty helpful.
+
+If diverging, or rising and shrinking, check for a bug in your code,
+and then lower alpha.
+
+Suggests trying alphas of 10^(-4:4). Or use factor of 3x. Then pick
+largest alpha that converges, or one slightly smaller.
+
+Polynomial regression: linear regression with a poly term.
+
+Feature scaling very important in polynomial regression, since 1 to
+10^3 feature turns into 1 to 10^6 and 1 to 10^9 for square and cube.
+
+Gradient descent vs "Normal equations"
+* GD
+   - needs to choose alpha
+   - needs many iterations
+   - works well even for a huge number of features
+* Normal equations
+   - no need to choose alpha
+   - no need to iterate
+   - have to compute inv(X'*X) which gets very expensive as X grows
+      since it grows by cube of size of X'*X. N=1000 ok, n=10k, start
+      thinking GD.
+
+Recommends pinv, not inv, because pinv is more tolerant to
+non-invertable matricies.
+
+Non-invertability is caused by linearly-related features,
+or more features than rows.
