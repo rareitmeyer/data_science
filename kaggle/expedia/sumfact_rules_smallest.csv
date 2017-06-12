@@ -1,0 +1,7 @@
+name,summarize_col,require_non_blank,rollup_cols
+mkt,hotel_cluster,yes,block31 hotel_market
+did_mkt,hotel_cluster,yes,block31 srch_destination_id hotel_market
+dtype_mkt,hotel_cluster,yes,block31 srch_destination_type_id hotel_market
+ch_mkt,hotel_cluster,yes,block31 channel hotel_market
+pkg_mkt,hotel_cluster,yes,block31 is_package hotel_market
+leak1,hotel_cluster,yes,block31 user_location_city orig_destination_distance
