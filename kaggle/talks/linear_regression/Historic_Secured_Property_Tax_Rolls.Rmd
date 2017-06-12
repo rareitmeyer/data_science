@@ -1,0 +1,254 @@
+---
+title: "Home Valuation^[Copyright 2016 R. A. Reitmeyer. Released under Creative Commons CC-BY 4.0 license.]"
+date: August 2016
+output: beamer_presentation
+---
+
+```{r echo=FALSE}
+library(xtable)
+library(ggplot2)
+library(car)
+options(xtable.comment = FALSE)
+train <- read.csv('property_train.csv')
+value_breaks=c(1e4,1e5,1e6,1e7)
+value_labels=c('$10k','$100k','$1M','$10M')
+```
+
+## Home Values for Property Tax Assessment
+
+- Look at real data: property values in San Francisco circa 2014
+    - Data courtesy city of San Francisco
+    - Will use ggplot2 and car packages
+- Have value, sqft, bedrooms, bathrooms, neighborhood, year_built...
+- Note that California Prop13 means values out-of-wack for long-owned homes
+
+```{r xtable, echo=FALSE, results="asis"}
+tab <- xtable(head(train,3))
+print(tab, type="latex", size="\\fontsize{6pt}{8pt}\\selectfont")
+```
+
+- QUESTION: Want to estimate property value (response) from other (predictor) columns
+
+
+## Start by Looking at Response
+
+- Always start by looking at data
+- Values run from < $10k to > $30M, and most are $100k to $1M.
+```{r echo=FALSE, fig.height=4, fig.width=5}
+qplot(total_value, 100*ecdf(total_value)(total_value), data=train, geom='line')+scale_x_log10(breaks=value_breaks, labels=value_labels)+xlab("Value")+ylab("% houses <= Value")+ggtitle("distribution of value")
+```
+
+## Look at Response vs Predictors
+
+- Theory: key predictors are sqft, bedrooms, bathrooms, neighborhood
+
+```{r echo=FALSE, fig.height=4, fig.width=5}
+# fix date columns
+train$recordation_date <- as.Date(train$recordation_date, format='%m/%d/%Y')
+train$change_date <- as.Date(train$change_date, format='%m/%d/%Y')
+train$sales_date <- as.Date(train$sales_date, format='%m/%d/%Y')
+train$p13_date <- as.Date(train$p13_date, format='%Y-%m-%d')
+value_x_scale <- scale_x_log10(breaks=value_breaks, labels=value_labels)
+value_y_scale <- scale_y_log10(breaks=value_breaks, labels=value_labels)
+
+ggplot(aes(x=sqft, y=total_value), data=train)+value_y_scale+geom_point(shape=1)
+```
+
+## bedrooms
+```{r echo=FALSE, fig.height=4, fig.width=5}
+qplot(factor(bedrooms), total_value, data=train, geom='boxplot')+value_y_scale
+```
+
+## bathrooms
+
+```{r echo=FALSE, fig.height=4, fig.width=5}
+qplot(factor(bathrooms), total_value, data=train, geom='boxplot')+value_y_scale
+```
+
+## Neighborhoods
+
+```{r echo=FALSE, fig.height=4, fig.width=5}
+qplot(neighborhood, total_value, data=train, geom='boxplot')+value_y_scale+theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+## Prop 13
+
+- Raw data has 'recordation date', 'sales date' and 'change date'.
+- Using latest of those to make a 'p13_date'
+
+```{r echo=FALSE, fig.height=3, fig.width=5}
+ggplot(aes(x=p13_date, y=total_value), data=train)+value_y_scale+geom_point(shape=1)
+```
+
+## Modeling in R
+
+- Linear model in R use lm() with a "formula"
+    - Y ~ x1 : basic prediction of Y using x1 with (implied) intercept
+    - Y ~ x1 - 1 : same, but (implied) intercept removed
+    - Y ~ x1 + x2 : predict on x1 and x2
+    - Y ~ x1 + I(x1^2) : Polynomial term. Use I to protect math. 
+    - Y ~ poly(x1, 2) : More numerically stable form, harder to analyize
+    - Y ~ x1 + x2 + x1:x2  : An interaction term
+    - Y ~ x1*x1 : shorthand for above
+- See ?formula
+
+## Simple model
+
+- From prior graphs, try a model of total_value ~ (baseline) + sqft + 
+    bathrooms + neighborhood
+- You might want to include p13_date, or other columns
+
+```{r}
+m1 <- lm(total_value ~ sqft + bathrooms + neighborhood,
+         data=train)
+```
+
+- Use summary(m1) to look at the model. 
+    - Too big to show in slide, unfortunately
+- Use BIC(m1) to get BIC.
+
+## Looking at a Model
+
+- Quality of a model is all about errors / residuals. Look at them!
+
+```{r, echo=FALSE, fig.height=4, fig.width=5}
+residualPlot(m1)
+```
+
+## Reminder of Assumptions
+
+- Errors independent and identically distributed
+- Errors normally distributed
+     
+## Are Errors Normally Distributed?
+
+- Not even close!
+
+```{r, echo=TRUE, fig.height=3.5, fig.width=5}
+qqnorm(m1$residuals); qqline(m1$residuals, col='red')
+```
+
+## So, Not Good. Now What?
+
+- Value spans several orders of magnitude, exp. distributed
+- So log transform it!
+    - General rule: log transform, or sqrt transform, to make gaussian
+    - Viz "Box-Cox" transformation
+- NB: after transforming response, cannot compare models!
+```{r}
+train$lvalue <- log10(train$total_value)
+m2 <- lm(lvalue ~ sqft + bathrooms + neighborhood,
+         data=train)
+c(summary(m2)$r.squared, BIC(m2))
+```
+
+## Q-Q Plot After Transforming
+```{r, echo=FALSE, fig.height=3, fig.width=5}
+qqnorm(m2$residuals); qqline(m2$residuals, col='red')
+```
+
+## Errors vs Model Terms: IID?
+
+- Assumption is that terms have IID errors
+- Regressing on a term, like sqft, means net sum of squares
+   on sqft is zero.
+- But remember graphs of linear models for different-shaped
+  data, and look at the residuals vs each predictor
+- If not IID, we should fix!
+- The car package has a residualPlots function that graphs
+   residuals
+    - Even better, fits a quadratic curve to the residuals!
+   
+## Residuals vs Predictors
+
+```{r, fig.height=4, fig.width=5}
+junk <- residualPlots(m2)
+```
+
+## Sqft
+
+- sqft also has several orders of magnitude, so log transform it
+```{r}
+train$lsqft <- log10(train$sqft)
+m3 <- lm(lvalue ~ lsqft + bathrooms + neighborhood,
+         data=train)
+c(summary(m3)$r.squared, BIC(m3))
+```
+```{r, echo=FALSE, fig.height=2.5, fig.width=5}
+junk <- residualPlots(m3, ~ lsqft)
+```
+
+## Try to Flatten sqft Errors with Poly Term
+
+```{r}
+m4 <- lm(lvalue ~ lsqft + I(lsqft^2) + bathrooms + 
+         neighborhood, data=train)
+c(summary(m4)$r.squared, BIC(m4))
+```
+```{r, echo=FALSE, fig.height=3, fig.width=5}
+junk <- residualPlots(m4, ~ lsqft + I(lsqft^2))
+```
+
+## Bathroom Poly Term?
+
+```{r}
+m5 <- lm(lvalue ~ lsqft + I(lsqft^2) + bathrooms
+         + I(bathrooms^2) + neighborhood, data=train)
+c(summary(m5)$r.squared, BIC(m5))
+```
+```{r, echo=FALSE, fig.height=3, fig.width=5}
+junk <- residualPlots(m5, ~ bathrooms + I(bathrooms^2))
+```
+
+## Neighborhood
+
+```{r, echo=FALSE, fig.height=3, fig.width=5}
+junk <- residualPlots(m5, ~ neighborhood)
+```
+
+## Neighborhood
+
+- Cannot add a poly term for a neighborhood.
+- But what about a model where the coef. for
+    sqft depends on neighborhood?
+```{r}
+m6 <- lm(lvalue ~ lsqft + I(lsqft^2) + bathrooms 
+         + neighborhood + lsqft:neighborhood, 
+         data=train)
+c(summary(m6)$r.squared, BIC(m6))
+```
+
+## Neighborhood
+
+```{r, echo=FALSE, fig.height=4, fig.width=5}
+junk <- residualPlots(m5, ~ lsqft*neighborhood)
+```
+
+## Etc.
+
+- Continue making models, looking at residual graphs, and trying out terms
+- Strive for a high R^2, and a low BIC.
+
+
+## Caution: Co-linearity
+
+- Had said "most" matricies have inverses. But if terms are
+   co-linear, then there is no inverse.
+    - Analogy: algbraic equations where one row is multiple of another
+- Even if not exact, close alignment between terms is bad: inverse is ill-defined.
+- Data has sqft + bedrooms + bathrooms + all_rooms (not used), which
+  all suggest a notion of 'size'
+    - Could end up with big positive coefficients for bedrooms + bathrooms,
+      big negative coefficient for all_rooms.
+- Techniques for dealing with this work to separate the ideas
+    - Simplest apprach: think of replacing 'size' by 'avg room size'
+    - More robust approaches (PCA) won't fit in this lecture
+- For today, will leave at "be cautious."
+
+
+## Recap: "Doing" Data Science
+
+- Have a question (property values ~ ?)
+- Look at data
+- Build simple model (m1)
+- Extend the model (m2...)
