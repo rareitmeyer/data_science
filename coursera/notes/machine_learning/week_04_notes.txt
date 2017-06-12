@@ -1,0 +1,118 @@
+Neural network model represenation.
+
+Neuron has dendron 'inputs' and axon 'output(s)' Axon can connect to
+several other neurons; dendron can connect to several other neurons.
+
+AI neural network is a logical unit with various inputs, and neuron
+outputs a value.
+
+h(x) is modeled as sigmoid, like classification: 1/(1+e^(-1*theta'*x))
+h(x) can be called an activation funtion.
+
+Neural network literature can call thetas 'weights'.
+
+May have a x0 term, called "bias unit." Not always shown in diagrams.
+
+Can have multiple layers of neurons, where subsequent layers are
+connected to multiple prior layers. Again, bias unit may or may not
+be shown.
+
+first layer is called input layer, as it receives raw inputs.
+last layer is called output layer.
+Any layers between first and last can be called a 'hidden' layer.
+
+More notation:
+    a_j^(j) is 'activation' of neuron i in layer j.
+
+Theta_j is a MATRIX of weights controlling the mapping from layer j
+to layer j+1.
+
+In a three layer network with 3, 3, and 1 nodes per layer,
+the hidden (middle) layer has activation equations
+
+    a_1 = g(Theta_10*x0 + Theta_11*x1 + Theta_12*x2 + Theta_13*x3)
+    a_2 = g(Theta_20*x0 + Theta_21*x1 + Theta_22*x2 + Theta_23*x3)
+    a_2 = g(Theta_30*x0 + Theta_31*x1 + Theta_32*x2 + Theta_33*x3)
+
+    where g is the sigmoid function (g(z) = 1/(1+e^(-1*z)))
+    Theta_10 is the bias term for neuron 1, etc.
+
+All of the a's on the LHS should have superscript (2) since they are
+for the second (hidden) layer, and all the x's and theta's on the RHS
+should have superscript (1) since they're for the first layer going to
+the second (hidden) layer.
+
+Then the final hypothsis is the output layer equation:
+
+    h(x) = g(Theta_10*a0 + Theta_11*a1 + Theta_12*a2 + Theta_13*a3)
+
+Where the a's are the activations of the prior (hidden) layer.  And in
+the class notation, everything on the RHS should have a superscript of
+(2) since this is the equation for going from the 2nd layer to the
+3rd.
+
+A network that has s_j units in layer j, and s_(j+1) units in
+layer j+1, will have a theta matrix of size s_(j+1)*(s_j+1).
+That's why the matrix for the hidden layer above has 3 rows
+and 4 columns. And the matrix for the final layer has 1
+row and 4 columns.
+
+More notation: use z_1^(2) to represent the internals of the
+sigmoid function for neuron 1, layer 2. So in prior equations:
+
+    z_1 = Theta_10*x0 + Theta_11*x1 + Theta_12*x2 + Theta_13*x3
+
+Here z_1 on the LHS is superscript(2) since it's for the second layer,
+while all the thetas and xs on the RHS are superscript (1) sinec they
+come from the first layer.
+
+Then a_1 = g(z_1), with g the sigmoid.
+
+And use the z equations to vectorize the equations:
+
+    z^(2) = Theta^(1)*x
+    a^(2) = g(z^(2))
+
+If you define a^(1) to be x, the notation gets consistent across all
+layers. Don't forget a bias layer that is always the theta for a x=1
+or a=1 term.
+
+The process of computing from one layer to the next is called "forward
+propagation."
+
+Can think of every node in every layer (after the first) as a logistic
+regression on their inputs.
+
+The number of layers and interconnections in a neural network is called
+the architecture.
+
+Pop quiz: (NOT x1) AND (NOT x2):
+h(x) = g(10 - 20*x1 - 20*x2)
+
+    x1    x2     z     h   desired
+  ---------------------------------
+     0     0     30    1      1
+     0     1    -10    0      0
+     1     0    -10    0      0
+     1     1    -30    0      0
+
+For multi-classification, we want to have N output units, where
+N is the number of classes. And we want to train the first
+output unit to be 1 for class 1, 0 otherwise, etc.  So one-vs-all.
+
+The training set will be expressed as vectors of [1;0;0;0] for
+class 1, [0;1;0;0] for class 2, etc.
+
+
+
+Quiz scratch:
+
+   z = 30 - 20*x1 - 20*x2
+
+    x1    x2     z     h
+  ------------------------
+     0     0    30     1
+     0     1    10     1
+     1     0    10     1
+     1     1   -10     0
+

@@ -1,0 +1,86 @@
+Principles of Analytic Graphics.
+
+Rules on building data graphics (Tufte, Beautiful Evidence):
+
+* Show comparisons. Evidence for a hypothisis is always relative to 
+   another hypothisis.
+* Show "causality" or mechanism or system structure. So show a plot 
+   that shows particulate matter vs air cleaner, and not just 
+   symptiom-free-days vs air cleaner
+* Show multivariate data. Show as much on one plot as you can. EG, split
+   up plots to show mortality by season, not all in one graph.
+* Integrate the evidence. So use words, tables, diagrams all on one display;
+   don't let the tools limit you.
+* Describe and document the evidence. Show sources, save code.
+* Content is king. If there's no story, there's not much to say.
+
+
+Exploratory graphs are made for yourself.
+* Understand data
+* find patterns
+* suggest modeling
+* debug a study
+
+Charateristics of exploratory graphs
+* Made quickly
+* large number are made
+* goal is personal understanding
+* axes/legends are cleaned up later
+* color/size are primarily used for info
+
+Even in EDA, you should still have a question in mind.
+Even if it's perhaps a bit vague.
+
+Can use rug with histogram or other graphs to show a bit more detail.
+
+Use abline(h=12) to draw a horizontal line at 12.
+
+
+Plotting systems in R.
+* Base plots.
+    * Artist's palette: start with blank page and add
+    * usually start with plot and text,lines,points with commands
+* Lattice.
+    * Every plot comes from a single call: whole plot built at once.
+    * Most useful for panel / conditioning plots.
+    * But shoving everything in a single call gets hard.
+* ggplot2
+    * thinks it splits the difference.
+
+
+Plotting systems
+
+Base systems:
+
+* graphics - plotting functions like plot or boxplot
+* grDevices - device drivers like X11, postscript
+
+Lattice systems:
+* lattice: the graphs
+* grid: the underlying graphics primatives
+
+
+Base functions mentioned:
+* hist
+* plot
+* boxplot. Takes formula.
+* title
+* text
+* legend
+* abline. Note abline can take a model, not just h or v.
+* par. Note that setting mfrow lays out by row, mfcol lays out by column.
+
+Good way to see pch values is
+example(points)
+
+
+Graphics devices in R.
+
+Use dev.set() to change the active graphic device.
+
+Can use dev.copy or dev.copy2pdf to copy a plot to a file. Not exact,
+so better to re-plot with the intended target.
+
+
+
+

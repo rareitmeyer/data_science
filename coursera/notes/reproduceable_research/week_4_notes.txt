@@ -1,0 +1,18 @@
+# Reproduceable Research Week 4
+
+Literate programming view things as intermixed code and documentation.
+
+R package "cacher" evaluates code and stores expression by hash.
+Could even distribute "cacher package" to get analysis or just the
+end products
+
+Has some ability to trace the code to figure out what code created
+each data object and the back dependencies
+
+Has functions to re-generate and checksum and confirm each result
+object.
+
+Note: cacher is not in cran for R 3.2.5. Was removed because it was
+not maintained as of R 3.1.0.
+
+

@@ -1,0 +1,355 @@
+---
+title: "Predicting Exercise Proficiency"
+author: "R. A. Reitmeyer"
+date: "February 5, 2017"
+output: 
+  html_document: 
+    keep_md: yes
+---
+
+# Abstract
+
+This paper demonstrates the ability to predict exercise proficiency
+from accelerometer data on weight lifting, using a random forests
+model and the R "caret" package. The model was selected from a 
+variety of possible modeling techniques, on the basis of the accuracy
+of prediction against a hold-out set of the training data. Cross-validation 
+was performed with the default caret::train technique of bootstrap 
+resampling. The rf model achieves better than 99% out-of-sample accuracy 
+when fit to a 11776-row subset of the original training data and tested on
+non-overlapping 3923-row subset of the original training data. A variety
+of other models were tried and will be briefly compared in graphical form.
+
+This is a class project for the coursera "Practical Machine Learning"
+class. For ease of grading, R code will be shown, in line, instead
+of being available separately. Please skip over the light-gray code 
+blocks unless interested in the code. The author has sympathy for anyone 
+who thinks the code blocks excessively breaks up the text of the paper 
+itself, but it seemed the lesser evil.
+
+
+```{r}
+# create a supress-output function for use later
+suppressAll <- function(fn, ...) {
+  retval <- NULL
+  tryCatch({
+    sink('out')
+    suppressWarnings(suppressMessages(
+      retval <- fn(...)
+    ))
+    },
+    error=function(e){}
+  )
+  if(sink.number()>0) {
+    sink()
+  }
+  return(retval)
+}
+# get all the library loading out of the way.
+library(gbm, verbose=FALSE, quietly=TRUE)
+library(ggplot2, verbose=FALSE, quietly=TRUE)
+library(kernlab, verbose=FALSE, quietly=TRUE)
+library(lattice, verbose=FALSE, quietly=TRUE)
+library(pander, verbose=FALSE, quietly=TRUE)
+library(parallel, verbose=FALSE, quietly=TRUE)
+library(plyr, verbose=FALSE, quietly=TRUE)
+library(randomForest, verbose=FALSE, quietly=TRUE)
+library(splines, verbose=FALSE, quietly=TRUE)
+library(survival, verbose=FALSE, quietly=TRUE)
+library(ModelMetrics, verbose=FALSE, quietly=TRUE)
+library(caret, verbose=FALSE, quietly=TRUE)
+```
+
+```{r}
+# Download a copy of the data to local dir (as a cache, to avoid
+# downloading repeatedly) and load into memory.
+train_filename <- 'train.csv'; train_url <- 'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv'
+if (!file.exists(train_filename))
+    download.file(train_url, train_filename, method='curl')
+test_filename <- 'test.csv'; test_url <- 'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv'
+if (!file.exists(test_filename))
+    download.file(test_url, test_filename, method='curl')
+overall_train <- read.csv(train_filename, na.strings=c('NA','#DIV/0!'))
+overall_test <- read.csv(test_filename, na.strings=c('NA','#DIV/0!'))
+# set seed
+set.seed(123456)
+# shuffle data to remove structure in ordering (viz stairstep pattern in dates)
+overall_train <- overall_train[sample(nrow(overall_train)),]
+# don't shuffle overall test, as unsure how those will be labeled.
+# overall_test <- overall_test[sample(nrow(overall_test)),]
+
+# Break overall_train into three sets, train, validate and test
+# as 60:20:20 split in anticpation of training a bunch of models
+# on 60% of the data, training a bagging algorithm / meta-model
+# on the next 20%, and estimating prediction error on the last 20%.
+train_idx <- caret::createDataPartition(overall_train$classe, p=0.6, list=FALSE)
+train <- overall_train[train_idx,]
+non_train <- overall_train[-c(train_idx),]
+validation_idx <- caret::createDataPartition(non_train$classe, p=0.5, list=FALSE)
+validation <- non_train[validation_idx,]
+test <- non_train[-c(validation_idx),]
+```
+
+
+
+# Introduction
+
+Data comes from the HAR project, with train and test data available at
+[```r train_url```](```r train_url```) and [```r test_url```](```r test_url```), respectively.
+
+Data represents activity over two days at the end of November 2011 and
+two days at the start of December 2015, as recorded by accelerometers
+during exercise. Each exercise was done correctly, as "classe" A, and
+in several incorrect techniques as "B" ... "E".
+
+The initial analysis plan was to fit several models with a variety of
+techniques, then fit a "bagged" meta-model, and check overall accuracy
+of the metamodel on a held-out data set. Initial training data was split 
+into 60:20:20 train/test/validation sets to reflect this, with all model
+training on the train set.
+
+
+## Data cleaning
+
+Raw training data has 19622 rows and 160 columns, with "NA" and "!DIV/0!" 
+values, both treated as NA. Data is more often missing than not, with 
+many columns having in excess of 97.5% NA values.
+
+Columns with more than 75% NA were removed, as well as low variance 
+columns identified by caret::nearZeroVar applied to the model training set.
+Similarly, row number, user name and date/time columns that may have 
+spurrious correlations but do not assist with predicting from accelerometer 
+readings have been removed. This left 53 columns for prediction of the
+"classe" column.
+
+
+```{r}
+# Cleanup and Visualization
+spurrious_cols <- c('X','user_name','raw_timestamp_part_1','raw_timestamp_part_2','cvtd_timestamp')
+pct_na <- function(data) 100*sum(is.na(data))/length(data)
+na_cols <- names(train)[(sapply(train, pct_na) > 75)]
+nzv <- names(train)[caret::nearZeroVar(train)]
+remove_cols <- union(c(spurrious_cols, nzv), na_cols)
+keep_cols <- setdiff(names(test), remove_cols)
+predict_cols <- setdiff(keep_cols, 'classe')
+train <- train[,keep_cols]
+test <- test[,keep_cols]
+validation <- validation[,keep_cols]
+overall_train <- overall_train[,keep_cols]
+overall_test <- overall_test[,intersect(names(overall_test),keep_cols)]
+
+# Metrics: consider accuracy, precision, recall and f1score
+score_helper_acc <- function(act, pred) {sum(act==pred)/length(act)}
+make_score_fn <- function(score_helper_fn=score_helper_acc) {
+  return (function(fit, data, resp='classe') {
+    pred_cols <- setdiff(names(data), resp)
+    score_helper_fn(data[,resp], predict(fit, data[,pred_cols], type='raw'))
+  })
+}
+acc <- make_score_fn(score_helper_acc)
+precision <- make_score_fn(ModelMetrics::precision)
+recall <- make_score_fn(ModelMetrics::recall)
+f1 <- make_score_fn(ModelMetrics::f1Score)
+```
+
+Columns used: `r predict_cols`.
+
+
+## Visualization with Naive PCA
+
+The data is complex and overlapping. Reducing dimensions of the predictor 
+variables with PCA to make it suitable for plotting shows a structure,
+but one unrelated to the classification response.
+
+```{r, fig.width=6, fig.height=4}
+# Basic PCA
+train_pca <- prcomp(train[,predict_cols],center=TRUE,scale=TRUE)
+plot_pca_x <- function(data, x1, x2, col) {
+  plot(data[,x1], data[,x2], col=col, pch=as.character(col), xlab='principle component 1', ylab='principle component 2')
+}
+
+plot_pca_x(train_pca$x, 1, 2, train[,'classe'])
+```
+
+
+
+# Modeling
+
+Modeling was performed with the caret package, to train a variety
+of models on the 'train' subset of the data.  All modeling was done
+with the caret::train defaults.
+
+Note that caret::train uses resampling as the default cross-validation
+method, with 25 resamples.
+
+The author expected this would produce a number of plausible fits 
+that could then be combined into a meta-model, trained on a held-out
+test set from 20% of the original training data.  The final meta-model
+would then be validated against a separate 20% of
+the original training data.
+
+
+```{r}
+# Fit with caret, by method name. Since some things run a long, long time, cache results
+# to disk by menthod name, data name and data size. Reload if one of those is available.
+manyfits_caret <- function(data, formula_str, method_names=c('rf'), data_name='train', trControl=NULL) {
+  lapply(method_names, function(m) {
+    if (is.null(trControl)) {
+      trControl <- caret::trainControl()
+    }
+    set.seed(892323)
+    savefilename <- sprintf('fit_%s_%s_%d.Rdata', m, data_name, nrow(data))
+    if (file.exists(savefilename)) {
+      load(savefilename)
+      return(retval)
+    } else {
+      print(sprintf('starting method %s', m))
+      can_do_multiclass <- FALSE
+      tryCatch({
+        sink('out')
+        suppressWarnings(suppressMessages(
+          caret::train(Species ~ ., data=iris, method=m, trControl=trControl)
+        ))
+        can_do_multiclass <- TRUE
+      }, 
+      error=function(e){print(e);print('but kept going in error handler')},
+      finally=if(sink.number()>0){sink()}
+      )
+      if (can_do_multiclass) {
+        elapsed<-system.time(fit <- caret::train(as.formula(formula_str), data=data, method=m, trControl=trControl))
+        print(sprintf("finished method %s in %f seconds", m, elapsed[3]))
+        retval <- list(method=m, can_do_multiclass=TRUE, elapsed=elapsed, fit=fit)
+      } else {
+        retval <- list(method=m, can_do_multiclass=FALSE)
+      }
+      save(retval, file=savefilename)
+      return(retval)
+    }
+  }
+  #, mc.preschedule=FALSE, mc.cores=3
+  )
+}
+
+caret_methods <- c('rf','gbm','ctree','lda','mda','rpart','loclda','knn')
+
+# Train some toy model sizes to confirm things work and get a sense of how model size
+# impacts performance, and allow for building some learning curves.
+# Note the data was already shuffled into random order. Pick 
+# sizes 1/100th and 1/10th before doing full model, and then chose geometric
+# means of those to add a few more points.
+mf_caret_train_118 <- manyfits_caret(train[1:118,], "classe ~ .", caret_methods) 
+mf_caret_train_373 <- manyfits_caret(train[1:373,], "classe ~ .", caret_methods) 
+mf_caret_train_1178 <- manyfits_caret(train[1:1178,], "classe ~ .", caret_methods) 
+mf_caret_train_3724 <- manyfits_caret(train[1:3724,], "classe ~ .", setdiff(caret_methods, 'gbm')) # no time for gbm
+mf_caret_train <- manyfits_caret(train, "classe ~ .", caret_methods) 
+
+# Build a learning curve data frame.
+n=c(118,373,1178,3724,11776)
+mf_caret_all <- list(mf_caret_train_118, mf_caret_train_373, mf_caret_train_1178, mf_caret_train_3724, mf_caret_train)
+if (!file.exists('learning_curve.Rdata')) {
+  learning_curve_data <- suppressAll(do.call, rbind, lapply(1:5, function(i) {
+    do.call(rbind, lapply(mf_caret_all[[i]], function(l) {
+      retval <- data.frame(points=n[i], method=l$method, 
+                 train_accuracy=acc(l$fit, train[1:n[[i]],]),
+                 test_accuracy=acc(l$fit, test))
+      return(retval)
+    }))
+  }))
+  save(learning_curve_data, file='learning_curve.Rdata')
+} else {
+  load('learning_curve.Rdata')
+}
+learning_curve_data$test_errors <- nrow(test)*(1-learning_curve_data$test_accuracy)
+```
+
+A learning curve shows how model accuracy for train (in-sample) and
+test (out-of-sample) data as the number of points for training increases.
+Typical behavior, after startup effects, is for training curves to fall
+as simple overfiting is penalized, and testing curves to increase as the
+model better learns the data.
+
+Here each method is shown by color, with training accuracy as dashed lines,
+and test accuracy as solid lines.
+
+```{r fig.width=6, fig.height=4}
+ggplot(learning_curve_data, aes(x=points))+
+  geom_line(aes(y=train_accuracy, group=method, color=method), linetype='dashed')+
+  geom_line(aes(y=test_accuracy, group=method, color=method), linetype='solid')+
+  scale_x_log10()+
+  ggtitle("Learning curves, caret::train methods, default settings")+
+  xlab("number of points used for training, log10 scale")+
+  ylab("accuracy")
+
+```
+
+From the learning curves, it is apparent that the rf (random forests)
+method performs best with the available data, with a test set
+accuracy of 
+```r round(subset(learning_curve_data,method=='rf'&points==11776)$test_accuracy,5)```,
+followed by gbm (generalized boosted models) method with test set 
+accuracy of
+```r round(subset(learning_curve_data,method=='gbm'&points==11776)$test_accuracy,5)```.
+
+
+Other methods did not perform as well. 
+
+```{r}
+pander(subset(learning_curve_data, points==11776))
+```
+
+
+
+## Final predictions
+
+Since gbm has roughly 5x the errors of random forest, and no other 
+method is close, a simple random forest method will be used for final 
+predictions. 
+
+While it is important to hold data out for model selection and model
+tuning, the learning curve shows that training the model on more data
+improves it. Moving from 3724 points to 11776 points (a factor of 3.16)
+increased rf accuracy from 
+
+```{r}
+pander(subset(learning_curve_data, method=='rf'))
+```
+
+So (to copy an idea from kaggle.com contests where data scientists compete on
+predictive power) a "production" model for final fits should be trained on all 
+of the data.  By training on all the data (a factor of 1.66 more than the test 
+subset), expected accuracy should be higher than 
+```r round(subset(learning_curve_data,method=='rf'&points==11776)$test_accuracy,5)```.
+
+
+
+```{r}
+# Use Kaggle leaderboard technique: train on all the data once you have a "good" 
+# model, to be further to the right on the learning curve.... if it's not flat.
+mf_train_overall <- manyfits_caret(overall_train, "classe ~ .", 'rf', data_name='overall_train')
+overall_test_predictions <- predict(mf_train_overall[[1]]$fit, overall_test)
+write.csv(overall_test_predictions, file='overall_test_predictions.csv')
+```
+
+
+## Estimated accuracy of final fit
+
+The caret fit has cross validation / resampling accuracy as part of the fit,
+so even without an explicit holdout, accuracy can be estimated.
+
+```{r}
+mf_train_overall_accuracy <- mf_train_overall[[1]]$fit$resample$Accuracy
+pander(data.frame(resample=1:length(mf_train_overall_accuracy), accuracy=mf_train_overall_accuracy))
+```
+
+The average accuracy across these samples is 
+`r round(mean(mf_train_overall_accuracy),5)`
+
+
+# Conclusion
+
+Random forest was the best method, using all default caret parameters. The error
+rate was roughly 1/5th that of the second-best technique, gradient boosted
+models. Out of sample prediction accuracy with 11776 training data points was 
+```r round(subset(learning_curve_data,method=='rf'&points==11776)$test_accuracy,5)```..
+The final prediction model, which uses all points, is expected to perform even better.
+

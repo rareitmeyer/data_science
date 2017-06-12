@@ -1,0 +1,100 @@
+Think of steps as
+
+- find raw
+- make processing script
+- make tidy data
+- analyze data
+- communicate results
+
+MAKE SURE YOU RECORD ALL STEPS IN DATA PROCESSING.
+
+
+Recommend creating a 'code book' explaining what each column means.
+Include units, and description of where data came from or experimental
+design.
+
+For course purposes, want a 'study design' section, and a 'code book'
+section, where 'study design' talks about where data came from
+and code book goes through each column.
+
+Also should document the instructions (or script) used to clean the
+data. Ideally, no parameters... or document the heck out of any that
+a user must specify.
+
+Raw = what you received, before any manipulation, summary or prune.
+
+Tidy = rows & cols, one table for each kind of data.
+
+Recommend long / wordy variable names as identifiers.
+
+Go overboard on documenting.
+
+
+Use R to download so that it's part of the script, rather than
+the instructions.
+
+
+funtions mentioned:
+- download.file -- use method=curl for https.
+- file.exists
+- dir.create
+- date() to get the date.
+
+Record the date you downloaded files for reproduceability.
+
+
+Recommend xlxs package for reading excel. XLConnect is worth a look 
+for heavy-duty work.
+
+read.xlxs allows picking a sheet index, row index and cell index.
+
+Can use XML package to get xmlTreeParse or htmlTreeParse to parse the data.
+Then xmlRootNode(doc) and things like xmlName(node) or xmlValue(node).
+Looks like structure of a document is built on R lists.
+
+There's a xmlSApply function.
+
+Thankfully, there is XPath support.
+  /node
+  //node at any level
+  //node[@attrname] any node with attr
+  //node[@attrname="value"] for node with attr matching value.
+
+Use as xpathSApply(root, xpath, function)
+
+Example in XML section shows the course is from spring or summer 2014;
+has all scores for 2013 football season, none from 2014.
+
+Recommend jsonlite package for JSON, with the fromJSON() function.
+Returns a data frame --- which can have another data frame withing it.
+
+Use toJSON to write out JSON from a data frame,
+
+
+data table
+can use cars[,cyl2:=2*cyl]  # add a new column in-place.
+
+Note data table does shallow copies on assignment.
+
+Can use ,by=<something> to make a grouping.
+
+  cars[,meanbycyl:=mean(wt),by=cyl]
+
+When using by, the special .N var has the number of times a group appears.
+
+Can set a 'key' on a data table with setkey(table, keycol).
+
+Once a key is set, just using table[value] will match on the key.
+
+If two tables have keys, merge(table1, table2) will do a much faster merge.
+
+Try fread instead of read.table to quickly read data.
+
+
+
+
+
+
+
+
+

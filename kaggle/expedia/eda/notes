@@ -1,0 +1,3 @@
+files were generated with psql and SQL similar to the following:
+
+\copy ( select hotel_market, count(*) as cnt, sum(is_booking) as bk, sum(score) as score from btrain GROUP BY 1 ORDER BY 1 ) TO '/home/r/src/kaggle/expedia/eda/hotel_market' CSV HEADER;

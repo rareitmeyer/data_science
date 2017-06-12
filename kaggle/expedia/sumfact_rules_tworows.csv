@@ -1,0 +1,3 @@
+name,summarize_col,require_non_blank,rollup_cols
+ch_mkt,hotel_cluster,yes,block31 channel hotel_market
+leak1,hotel_cluster,yes,block31 user_location_city orig_destination_distance

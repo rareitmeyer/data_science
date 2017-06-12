@@ -1,0 +1,128 @@
+# Reproducable Research
+
+Reproduceability
+* communicate what was done and how to do it.
+* but there is not agreed-upon notation for how to do that.
+   * some people will describe in words, may not be enough
+   * some will share code and data, but can still be quite complex
+
+If you want to communicate what you've done, you need tohelp
+them duplicate.
+
+Replication is the standard for strengthing evidence.
+
+Some studies cannot easily be replicated
+   * not enough time, like a 20 year monitoring
+   * or money
+   * unique
+
+Reproduceable research is less than full replication, but more
+than nothing.
+
+Reproduceable research is a validation of the data analysis.
+
+Dr. Peng's research is on reproduceable air pollution and health.
+
+iHAPSS: internet-based Health and Air Pollution Surveillance System.
+
+When you read an article, you get the article, but there is a lot more
+that happened than just writing the article. Idea for reproduceability
+is to meet at the 'analytic data' and 'computational results, not just
+the article text.
+
+What do we need?
+* analytic data available
+* analytic code available
+* documentation of code and data
+* standard means of distribution
+
+Parties:
+* Authors who produce research
+* Readers who want to reproduce and extend
+
+Literate programming. Article as a mix of text and code chunk.
+
+Sweave, original system.
+
+Knitr, improves on Sweave.
+
+Reproduceable research is minimum standard. Infratructure is needed,
+but improving.
+
+Golden rule of reproduceablity: script everything! It's the
+most reproduceable way to write things down.
+
+Steps in data analysis:
+* Define the question
+* determine the ideal data set
+* determine whay you can access
+* obtain the data
+* clean the data
+* exploratory data analysis
+* statistical prediction/modeling
+* interpret results
+* challenge results
+* synthesize / write up results
+* create reproduceable code
+
+If you get data from the internet, record the URL and the timestamp.
+
+Generate test/train sets via sampling and rbinom.
+
+Challenge results: if you don't, other people will. Be a step ahead.
+challenge the whole process --- was the question meaningful, etc.
+
+When writing up the results, lead with the question. Summarize into
+the analysis into a story. Don't include every analysis, just include
+the ones needed for the story. But keep everything done in back
+pocket, in case someone asks. Think of a logical order, not a
+chronological order, and tell the story in logical order.
+
+Document as you go with RMarkdown and/or knitr. This will preserve
+your code and your thoughts.
+
+Organizing a data analysis:
+
+* Data
+    * Raw
+    * Processed
+* Figures
+    * exploratory
+    * final
+* R code
+    * Raw / preliminary / unused
+    * final
+    * RMarkdown files
+* Text
+    * Readme
+    * text of analysis / report
+
+Store the raw data in analysis folder. Save the URL, timestamp in readme
+if they come from the web.
+
+Think about putting raw data into the git repo with your analysis, if
+that is reasonable.
+
+Processed data should be named in way that makes it easy to see what
+script generated it. The mapping between processing script and file
+should be described in the readme. Processed data should be tidy.
+
+Final figures are often a very small subset of the figures generated
+in EDA. Made more clear, perhaps multi-panel.
+
+Raw scripts may have fewer comments, or have multiple versions, or have
+analyses that is later discarded. But the final scripts should be well
+commented and only have the analyses used. Include the processing details.
+
+Readme may not be needed if you use R Markdown. If not, readme needed
+to have step by step explaination of what is going on.
+
+The final document should NOT include every analysis you did. It should
+include references on the methods and software used.
+
+R package: Project Template, intended to help people start consistent
+projects.
+
+
+
+

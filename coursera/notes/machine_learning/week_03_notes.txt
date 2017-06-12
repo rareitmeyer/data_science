@@ -1,0 +1,270 @@
+negative class: 0
+positive class: 1
+
+0 or 1 is arbirary, but usually 0 used for absence and 1 for presence.
+
+linear regression breaks down in classification problems if there is
+an outlier or two on x which can pull the line off toward the
+outlier. A logistic regression avoids this pitfall.
+
+Example in R:
+
+    library(ggplot2)
+    data1 <- data.frame(x=c(1:4, 6:9, 19, 20), y=c(rep(0,4),rep(1,4), 1, 1), z=c(rep(0,8),c(1,1)))
+    predict_x <- sort(c((0:80)/4, seq(4.01,5.99,0.01))) # Xs to predict at, for a nice curve
+    # models for linear or logistic regression, using non-outlier points or all points
+    m1_lin <- lm(y~x, subset(data1, x<10))
+    m1_log <- glm(y~x, subset(data1, x<10), family='binomial')
+    m2_lin <- lm(y~x, data1)
+    m2_log <- glm(y~x, data1, family='binomial')
+    # predictions
+    linear1 <- data.frame(x=predict_x, y=predict(m1_lin, data.frame(x=predict_x)))
+    log1 <- data.frame(x=predict_x, y=predict(m1_log, data.frame(x=predict_x), type='response'))
+    linear2 <- data.frame(x=predict_x, y=predict(m2_lin, data.frame(x=predict_x)))
+    log2 <- data.frame(x=predict_x, y=predict(m2_log, data.frame(x=predict_x), type='response'))
+
+    ggplot(data=data1, aes(x=x,y=y,color=factor(z)))+geom_point()+
+        geom_line(aes(x=x,y=y), data=linear1, color='blue', linetype=2)+
+        geom_line(aes(x=x,y=y), data=log1, color='blue', linetype=3)+
+        geom_line(aes(x=x,y=y), data=linear2, color='red', linetype=2)+
+        geom_line(aes(x=x,y=y), data=log2, color='red', linetype=3)
+
+Notice crossover points moves a little under linear regression.
+
+Sigmoid = Logistic.  g(z) = 1/(1+e^(-z))
+
+Using h as hypothisis function, h_theta(x) = g(theta'*x) = 1/(1+e^(theta'*x))
+
+Intepretation of h is a probability from 0...1 that a given input is
+the positive case.
+
+Cutoff for sigmoid (g(z) >= 0.5) happens at z=0.
+
+Since h(z) is h(theta'*x), then theta'*x = 0 is the cutoff, in terms of
+theta and x.
+
+Decision boundary: the cutoff hyperplane where theta'*x = 0, that defines
+the separation between prediction > 0.5 and < 0.5.
+
+Can handle non-linear boundaries via non-linear terms. EG, boundary of
+
+    x1^2 + x2^2 = 1 corresponds to
+    theta_0+theta_1*x1+theta_2*x2+theta_3*x1^2+theta_4*x2^2 = 1
+    with theta_0 = -1, theta_{1,2} = 0, theta_{3,4} = 1.
+
+In linear regression, our cost function J was J(theta) = 1/m*sum(1/2*error^2)
+
+Can think of this as the cost of each data point is 1/2error^2.
+
+Because of the non-linear aspect of h for logistic regression, the
+overall cost function J is non-convex if used with the linear regression
+cost.
+
+So use point-wise cost function of -log(estimate) if y = 1, and
+-1*log(1-estimate) if y = 0.
+
+This point-wise cost has some nice properties on the range 0..1.
+
+* It's very near zero if the estimate is very near the actual 0 or 1
+   value of y.
+
+* The decay from 'near zero' is quite small at first and then grows
+   more rapidly as estimate is farther away. If completely wrong,
+   point-wise cost goes to infinity.
+
+Overall cost remains
+
+    J(theta) = 1/m*sum(pointwise-cost)
+
+pointwise-cost for logistic regression is
+
+    -log(h_theta(x))  if y = 1
+    -log(1-h_theta(x)) if y = 0
+
+Since y is always 0 or 1, can write this as
+
+    -log(h_theta(x))*y + -log(1-h_theta(x))*(1-y)
+
+So overall cost function J(theta) to minimize is
+
+    -1/m*(y'*log(g(X*theta))+(1-y)'*log(1-g(X*theta)))
+    where g(x) = 1/(1+e^(-x))
+
+From prior lesson, gradient descent is built on starting from an initial
+estimate for the (scalar) thetas, and each theta by
+
+    theta_j_new = theta_j_old - alpha*d/dtheta_j(J(theta))
+
+derivative is for theta_j term is
+
+    1/m*sum((estimate-actual)*x_j)   # sum taken across all points...
+
+Remember the estimate involves that g(x) term with g(x) = 1/(1+e^(-x))!
+
+Again, do a simultaneous update for thetas: compute all the new terms
+before using them.
+
+The J function we use can be found via maximum likelihood methods, not
+shown in class.
+
+Feature scaling can also help logistic regression.
+
+Alternative algorithms for optimization:
+* gradient descent
+* conjugate gradient
+* BFGS
+* L-BFGS
+
+Those algorithms would be covered in an advanced numerical computing
+class, not here.
+
+All of these need J(theta) and the partial of J(theta) for each term.
+
+Advanced algorithms are typically faster than gradient descent, and no
+need to pick alpha, but more complex.
+
+Just use the built-in libraries in Octave or whatever. Note that
+some implementations can be better than others.
+
+To use, write octave function that returns the cost function (call it
+costfn for this example) as a scalar and the gradient as a
+vector. Then call fminunc(@costfn, initial_theta, options).  An exit
+flag of 1 signals converged. Note that fminunc cannot optimize
+one-dimension functions, so theta must be of dimension 2 or more.
+
+Note that Octave uses one-based indexes, so gradient(1) is the
+gradient for theta_0.
+
+One vs all classification.
+
+Classes can be indexed from 0 or 1 for multi-classification.
+
+One vs all creates N binary classification probelms.
+Notation: h_theta^(n)(x) is hypothsis for classifier n.
+
+In multi-classification, run all the predictors (hypothsis functions)
+and pick the one that gives the highest value.
+
+
+Overfitting and regularization
+
+Underfit, high bias = fitting a straight line to non-linear data.
+So if evidence says line is wrong, but you insist on a line,
+then that's a bias.
+
+overfitting, high variance = using too many terms.
+
+In general, ovefitting is when the model fits the training
+set very well, but does not generalize to new examples well.
+
+Plotting is a nice way to look for overfitting if there are
+just a few dimensions, but won't work for more than a few.
+
+Address overfitting by two techiques:
+
+* dropping features. Either manually or via model selection algorithms.
+
+* regularization. Keep all features, but reduce magnitude of thetas.
+    works well if all features important but only contribute a little.
+
+Regularization cost function. Pretend you had a cost function like
+this for linear regression:
+
+    1/2/m*sum(error^2)+1000*theta3^2+1000*theta4^2
+
+Minimizing this will certainly "strive" to minimize theta3 and
+theta4, without eliminating them entirely.
+
+Having small values is "simpler" hypothisis than letting them range freely.
+And this makes them less prone to overfitting.
+
+Don't penalize the baseline theta0 term.
+
+Modify the cost function to add a "regularization" term:
+
+    lambda*sum(theta1^2...thetaN^2) --- don't include theta0.
+
+Wrap the regularization term in the usual 1/2/m too.
+
+Lambda is the regularization parameter.
+
+If lambda is set much too large, then all the parameters (except for
+the baseline) end up close to zero, which is equivalent to fitting
+a straight line --- so underfitting.
+
+So you need to chose lambda carefully.
+
+For gradient descent, end up with different equations for theta0 and
+other terms
+
+    theta_0 := theta_0 - alpha*(1/m*sum(error))
+    theta_j := theta_j - alpha*(1/m*sum(error*xj)+lambda/m*theta_j)
+    Remember the theta_j equation is just for j 1..N, not j==0
+
+Equivalently,
+    theta_j := theta_j*(1-alpha*lambda/m) - alpha/m*sum(error*xj)
+
+The 1-alpha*lambda/m term is usually a bit less than 1, which tends to
+make thetaj smaller.
+
+In normal equations, the original equation was
+
+    theta = inverse(X'*X)*X'y
+
+The regularized form is
+
+    theta = inverse(X'*X + lambda*almostI)*X'y
+    Here almostI is I with 0 in top-left corner.
+
+
+Regularization can help with having more features than examples, because
+the lambda*almostI term will make the inverse exist.
+
+Cost function for logistic regression:
+
+    J(theta) = -1*[1/m*sum(y^(i)*log(est^(i))+(1-y^(i)*log(1-est^(i))))]+lambda/2/m*theta^2
+    Where est_i is estimate for i, from 1/(1+e^(-1*theta'*x^(i)))
+    using the notation that foo^(i) is foo for the i-th data point.
+
+
+For gradient descent, logistic regression
+
+    theta0 := theta0 - alpha*(1/m*sum(error))
+    thetaj := thetaj - alpha*(1/m*sum(error*xj)+lambda/m*theta_j)   # for j 1..N
+
+Remember the error is based on a predictor
+
+    h_theta(x) of form 1/(1+e^(-1*theta'*x))
+
+In matlab / octive, we need to define a function that returns
+the J value, and the gradient vector:
+
+    function [jVal, gradient] = costFunction(theta)
+
+Then we can use fminunc function.
+
+Remember gradient vector is off-by-one, so theta0 gradient is gradient(1)
+in matlab/octave.
+
+And remember the cost function has that regularization term
+
+    lambda/2/m*sum_j(theta_j^2)
+
+
+
+logistic_regression quiz:
+1) if logistic regression h(x) = 0.2, then
+- estimate for P(y=1|x) is 0.2
+- estimate for P(y=0|x) is 0.8
+2) For a classifier of four points that have + in middle of triangle of 3 o:
+- j(theta) will be convex and so converge to global minima.
+- adding poly features will increase fit of TRAINING data.
+3) For logistic regression, gradient is .... Learning rate for alpha is
+- terms with either h(x) or 1/1+e^(theta'x)
+4) It is true that
+- cost function is always >= 0
+- one vs all allows for logistic regression where y is fixed values.
+- it is NOT TRUE that all-vs-one trains 2 classifiers for 3 classes.
+5) For h(x) = g(theta_0+theta_1*x_1+theta_2*x2), with theta_0 = 6,
+   theta_1 = 0 and theta_2 = -1, then the classifier region is a horizontal
+   line at x2=6, with y=1 below and y=0 above.

@@ -1,0 +1,347 @@
+
+submision_20160503_01.csv
+loaded data into SQL and made a 'simple' table with count and percent columns
+for every cluster based on is_booking=1, grouped by srch_destination_id
+and hotel_market. Then joined with test, and assigned each cluster
+the pct from the simple table, and picked the higest 5 clusters. Did not
+worry about the test data that did not have a corresponding row in the
+simple table (left those clusters 0 1 2 3 4) and did not do anything for
+the data leak.
+
+Was one row short (record for 2528242 was missing), so just manually
+copied over the final row. Scored 0.30223, which was 388 on leaderboard.
+(Top 200 on leaderboard was 0.37815, top 100 on leaderboard was also
+0.37815; top 50 was 0.45824; top 10 was 0.48906; best was 0.50669.)
+
+
+submission_20160506_01.csv
+
+Used far more data, organized by pct_in_cluster across all the
+different data sources. Scored 0.36733, which is 418 on the leaderboard.
+That still counts as an "advance" of 104 places. Rank 400 is 0.37815,
+which is the same score down to place 257. Rank 200 is 0.47156.
+Rank 100 is 0.49208. Top 10 is 0.49576. Top position is 0.50669.
+
+
+random_submission_20150507_*
+
+A submission based on simply assiging each ID a random set of 5 clusters.
+(See random_submission.py.). This is intended to help get a baseline
+for comparison.  This scored 0.02273. Incidentally, the 0.36733 score
+from yesterday is now ranked 445.
+
+
+
+overall_submission_20150507*
+
+A submission based on the clusters preferred overall (where is_booking=1),
+based on the overall_clusters.sql code and overall_submission.py python
+code. Scores 0.06986.
+
+
+Submission_20160508_01.csv
+
+Submission based on function of same name. Moved up score by 0.00098,
+to 0.36831, which is 532 on leaderboard as of 2016-05-09T16:42.
+
+
+Submission_20160508_02.csv
+
+Submission based on function of same name. Boosted score bby 0.0060,
+to 0.37481, which is position 532 on leaderboard.
+
+
+Submission_20160514_01.csv.xz
+
+Submission based on PostgreSQL implementation of 11 rollups using 
+0.15*cnt+0.85*is_booking as the 'weighted score' factor.
+
+    select tblsrc, count(*) from prediction_20160514 group by tblsrc order by count(*);
+             tblsrc     |  count  
+        ----------------+---------
+         r_im           |    2842
+         r_dtype        |    3340
+         r_pkg          |   46715
+         r_mkt          |  687775
+         r_dtype_mkt    |  785376
+         r_odis_ucit    | 1010455
+         r_ch_mkt       | 1582629
+         r_mkt_pkg      | 1672924
+         r_did_mkt      | 1822122
+         r_did          | 2069788
+         r_ch_dtype_mkt | 2957249
+
+This scored 0.21220, which is considerably below the 0.37481 from earlier.
+Incidentally, the 0.37481 score is now 760th in the rankings.
+
+
+submission_20150515_01.csv.gz
+
+Took earlier submission and combined it with a broader rollup. Ranked 0.21304.
+
+SQL:
+    CREATE TABLE pred_20160515_01 AS ( WITH unioned AS (
+     SELECT
+              id, hotel_cluster, Pc_f, tblsrc
+            FROM (
+              SELECT
+                  id, hotel_cluster, cws/fws as Pc_f, CAST('r_dtype' AS VARCHAR(40)) as tblsrc,
+                  row_number() OVER ( PARTITION BY id ORDER BY cws/fws desc, hotel_cluster DESC) as rownum
+                FROM test
+                NATURAL JOIN rall_ch_did_dtype_mkt_pkg
+              ) AS r_ch_did_dtype_mkt_numbered
+              WHERE rownum <=5
+    UNION ALL
+      select * from prediction_20160514
+    )
+    SELECT id, hotel_cluster, Pc_f, tblsrc
+      FROM (
+        SELECT *, row_number() OVER ( PARTITION BY id ORDER BY Pc_f DESC, hotel_cluster ) as rownum FROM (
+            SELECT id, hotel_cluster, max(Pc_f) as Pc_f, min(tblsrc) as tblsrc
+              FROM unioned
+              NATURAL JOIN (
+                SELECT id, hotel_cluster, max(Pc_f) as Pc_f
+                  FROM unioned
+                  GROUP BY id, hotel_cluster
+              ) as zzz1
+            GROUP BY id, hotel_cluster
+          ) AS zzz2
+      ) AS zzz3
+      WHERE rownum <= 5
+      ORDER BY id, Pc_f DESC
+     )
+    ;
+    
+
+submission_20160516_04:
+
+This was pretty painful, but started using bigger models. Started
+using better tire-breaking. Realized my aggregation function was
+not enforcing an order. Etc. But took a long time with all the
+extra stuff I'd tossed in, and a lack of simpler models meant I
+kept missing test ids.
+
+Waagh.
+
+Most important model, courtesy David's suggestion, was
+r_ch_did_dtype_mkt_pkg or maybe r_chld_did_hcon_hcou_mkt_pkg.  Also
+used r_dtype_mkt_sn and r_odis_ucit_ucou for leak. Then had to
+add in a bunch of stuff later when I found those were missing
+a lot of rows...
+
+Reached 0.44200, which feels like a big accomplishment, but
+is still 713th.
+
+Turns out my 'score' function is almost certainly wrong:
+I've been using 0.15*cnt+0.85*is_booking, but others are
+using 0.15*count(*)+0.85*is_booking --- which is pretty different.
+
+
+submission_20160518_01:
+
+Re-wrote to use a different scoring function and a different approach
+to 'aux' columns (now base + aux stored in one table so I can index
+it).  Now taking advantage of rall_* tables. Changed how rall_
+tie-breaking works.
+
+Reached 0.44706, which puts me at 770.
+
+
+submission_20160518_04:
+
+Belatedly submitted May 31. Ranked 0.44427, so not quite as good as
+20160518_01.
+
+submission_20160530_01, based on big graph cliques.
+
+
+submission_20160601a:
+
+used models inspired by dalyea, and score is now 0.49331,
+which ranks 1023, an improvement of 136 positions.
+
+
+submission_20160603_01:
+
+Same as earlier, but flipped around scoring weights to be 0.15*cnt+0.85*cbk.
+Scored slightly worse, 0.49262.
+
+submission_20160603_03:
+
+Used python code this time, with a blend of the rall_ model in 
+each model, in expectation this would help with overfitting.
+Scored 0.44303, which is down pretty far from 0.49331. But
+I applied the rall_ model to everything, including 'the leak,'
+which is almost certainly sub-optimal.
+
+
+20160606_01:
+
+Scored 0.37023. Incidentally, the 0.49331 score from earlier is now 1101
+out of 1988.
+
+
+20160606_02:
+
+Skipped on belief that _01 was pretty bad.
+
+
+20160606_03:
+
+Scored 0.39702.  
+
+
+20160606_04:
+
+Scored 0.37736.
+
+
+20160606_05:
+
+Scored 0.41967
+
+
+20160606_06:
+
+Scored 0.41846
+
+
+20160607_01:
+
+From load tables fn of same name.
+
+This *should* be the same as the 20160601_01a submission, but it isn't.
+Debugging, but might as well submit, too. Maybe it's better somehow...
+
+Scored 0.48232.
+
+
+20160607_02:
+
+This also scored 0.48232 --- looks like they're the same checksum.
+
+
+20160607_03:
+
+Scored 0.48392.
+
+20160607_04:
+
+This comes from pg_predict and is leak+user recommendation plus
+some models from load_table.R's search_params.3
+
+Scored 0.40520.
+
+
+20160607_05:
+
+This comes from load_tables.
+
+Scored 0.48288.
+
+
+20160608_01(a):
+
+Better leak, in theory. Used the 01a from python, but fingers crossed
+it will match postgres solution which is still running.
+
+Scored 0.49322.
+
+Current best of 0.49331 is 1120s on the leaderboard.
+
+
+20160608_02:
+
+This scored 0.49947, which does not seem like a huge improvement, but
+was enough to jump ~375 positions on the leaderboard to #753.
+
+20160608_04:
+
+The _03 and _05 submissions did not finish in time, but this (barely)
+did.  Scored 0.49811, which is a little lower than the 0.49947 of earlier.
+
+Lesson: lp of -1.5 was better than -0.75, or cr/cct of 0.13/0.02
+was better than cr/cct of 0.03/0.12. (Or both.)
+
+
+20160609_01:
+
+Redo of 20160608_02. I've fixed tie-breaking so I expect this
+will be slightly better.
+
+Improved very slightly, to 0.49965. That ranks 768 now.
+
+
+20160609_02:
+
+Almost the same, but try with cr/cct of 0.03/012 to see if the
+20160608_02 vs 20160608_04 difference is from lp or cr/cct.
+
+Scored 0.49926, slightly worse.
+
+
+20160609_03:
+
+Scored 0.49906.
+
+
+20160609_04:
+
+Scored 0.49788.
+
+
+20160609_05:
+
+Scored 0.49725.
+
+
+20160610_01:
+
+Scored 0.49817. incidentally, the 0.49965 score now ranks 783.
+
+
+20160610_02:
+
+Scored 0.49591.
+
+20160610_03:
+
+Used a XGBoost model on top100 data with max_depth=100 (too deep,
+I suspect) as a second layer after leak. Scored 0.49912. Best 0.49965
+score now ranks 787.
+
+20160610_04:
+
+Wanted to use rcosh for just the UR layer, but inadvertently used it
+almost everywhere. Whoops. Scored 0.49467. Incidentally, the 0.44965
+score is now 798 with ~90 minutes to go.
+
+
+20160610_05:
+
+Tried again. Scored 0.49691. All-best score of 0.49965 is currently #799
+on the leaderboard.
+
+
+
+ ================
+
+Competition closed at 5 o'clock Pacific, but I had two long-running
+XGBoost sessions I wanted to submit anyway.
+
+20160611_01
+
+XGBoost for top 100 factors, with maxdepth of 16, down from the
+maxdepth of 100 earlier. This only impacts ~8% of the test rows.
+
+This scored 0.49569, and would have put me at position 825 on the
+leaderboard.
+
+
+20160611_02
+
+XGBoost for top 200 factors, otherwise same as the 01. This impacts
+~12% of the rows.
+
+This scored 0.49523, and would have put me at position 841.
+

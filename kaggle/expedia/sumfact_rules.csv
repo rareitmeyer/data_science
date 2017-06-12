@@ -1,0 +1,16 @@
+name,summarize_col,require_non_blank,rollup_cols
+r_bk,hotel_cluster,yes,block31 is_booking
+r_hco,hotel_cluster,yes,block31 hotel_country
+r_mkt,hotel_cluster,yes,block31 hotel_market
+r_im,hotel_cluster,yes,block31 is_mobile
+r_did,hotel_cluster,yes,block31 srch_destination_id
+r_dtype,hotel_cluster,yes,block31 srch_destination_type_id
+r_did_mkt,hotel_cluster,yes,block31 srch_destination_id hotel_market
+r_dtype_mkt,hotel_cluster,yes,block31 srch_destination_type_id hotel_market
+r_ch_mkt,hotel_cluster,yes,block31 channel hotel_market
+r_pkg,hotel_cluster,yes,block31 is_package
+r_mkt_pkg,hotel_cluster,yes,block31 is_package hotel_market
+r_odis_ucit,hotel_cluster,yes,block31 user_location_city orig_destination_distance
+s11,hotel_cluster,yes,block31 hotel_continent hotel_country
+s12,hotel_cluster,yes,block31 srch_destination_id hotel_country hotel_market
+r_ch_mkt_dtype,hotel_cluster,yes,block31 channel srch_destination_type_id hotel_market

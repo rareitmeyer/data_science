@@ -1,0 +1,85 @@
+
+Predicting Diamond Price: Regression Modeling Practice
+========================================================
+author: R. A. Reitmeyer
+date: 2017-03-05
+autosize: true
+font-family: 'Helvetica'
+css: presentation.css
+
+
+Predicting Diamond Price: Regression Modeling Practice
+========================================================
+
+The author is pleased to announce a R Shiny application
+students of the Coursera "Data Science" lectures can use
+to practice their regression skills: [http://rareitmeyer.shinyapps.io/data_products_diamonds/]
+
+Predicting Diamond Price: Regression Modeling Practice
+is now available on Rpubs.
+
+This app helps students focus on regression modeling,
+using the ggplot2 "diamonds" data set.
+
+The github source for this app is available online at
+[http://github.com/rareitmeyer/data_products_diamonds/]
+
+
+Prediction skills need practice
+========================================================
+
+Like any other skill, prediction is something aspiring
+data science students need to practice to get better at.
+
+The app has built-in exploratory data analysis, and
+automatically breaks data into test and training sets.
+
+Regression models are automatically evaluated on the
+test set. In addition to the standard root mean squared error
+(RMSE), a small table is provided with a six number summary
+of errors.
+
+Last but hardly least, the residualPlots from the car
+package are automatically generated, to help the student
+quickly spot trends in the training set errors.
+
+
+Test Errors
+========================================================
+
+The app calculates out-of-sample errors, and shows students
+a small summary table. For a simple model of price ~ caret + color:
+
+```{r, echo=FALSE}
+# hide this block: it's boring
+library(ggplot2)
+library(xtable)
+source('common.R')
+set.seed(defaults$seed)
+diamonds_test_idx <- sample(nrow(diamonds), test_size)
+diamonds_test <- diamonds[diamonds_test_idx,]
+diamonds_train_idx <- sample((1:nrow(diamonds))[-diamonds_test_idx], defaults$sample.size)
+diamonds_train <- diamonds[diamonds_train_idx,]
+print_xtable <- function(data) {
+    print.xtable(xtable(data), type='html', include.rownames=FALSE)
+}
+```
+
+```{r, results='asis'}
+mdl <- lm(price~carat+color, diamonds_train)
+print_xtable(testErrors(mdl, diamonds_test))
+```
+
+
+Diagnostics
+========================================================
+
+Here's a typical diagnostic graph for a simple price ~ carat + color
+model. Note the graph shows nolinear behavior with carat, suggesting
+adding a carat^2 term is appropriate:
+
+```{r, echo=FALSE, fig.width=8, fig.height=6, fig.show='hold', fig.align='center'}
+library(car)
+foo <- residualPlots(mdl)
+```
+
