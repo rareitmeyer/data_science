@@ -1,0 +1,265 @@
+
+# Load data.
+```{r, echo=FALSE}
+input_dir = '../input'
+input_filename <- function(name, dir=input_dir) {
+    file.path(input_dir, name)
+}
+predict_col <- 'price_doc'
+macro <- read.csv(input_filename('macro.csv'))
+overall_train <- merge(read.csv(input_filename('train.csv')), macro, by='timestamp')
+overall_test <- merge(cbind(read.csv(input_filename('test.csv')), price_doc=NA), macro, by='timestamp')
+overall_data <- rbind(cbind(overall_train, istrain=TRUE),
+                      cbind(overall_test, istrain=FALSE))
+
+# fix a few column types
+overall_data$child_on_acc_pre_school <- as.numeric(as.character(overall_data$child_on_acc_pre_school))
+overall_data$modern_education_share <- as.numeric(as.character(overall_data$modern_education_share))
+overall_data$old_education_build_share <- as.numeric(as.character(overall_data$old_education_build_share))
+
+
+```
+
+Break overall_train into three sets, train, validate and test
+as 60:20:20 split
+
+```{r, echo=FALSE}
+library(caret)
+
+
+
+# Partition data
+# set seed as contest completion date for repeatability
+set.seed(20170529)
+overall_train_idx <- 1:nrow(overall_train)
+train_idx <- caret::createDataPartition(overall_data[overall_train_idx,predict_col], p=0.6, list=FALSE)
+non_train <- overall_data[setdiff(overall_train_idx, train_idx),]
+train <- overall_data[train_idx,]
+validation_idx <- caret::createDataPartition(non_train[,predict_col], p=0.5, list=FALSE)
+validation <- non_train[validation_idx,]
+test <- non_train[-c(validation_idx),]
+submission_test <- overall_data[-overall_train_idx,]
+```
+
+# Clean up.
+
+## full_sq and life_sq
+
+Have life sq < 5 or full sq < 5 is probably an error. Remove to impute later.
+Also have full sq < life sq, usually by a lot. *Guess* that this is a coding
+error and full is accidentally recorded as the extra.
+
+
+```{r, echo=FALSE}
+qplot(life_sq, full_sq, data=overall_data)+scale_x_log10()+scale_y_log10()
+overall_data$life_sq[overall_data$life_sq < 5] <- NA
+overall_data$full_sq[overall_data$full_sq < 5] <- NA
+
+
+idx <- overall_data$full_sq < overall_data$life_sq
+idx <- !is.na(idx) & idx
+overall_data$full_sq[idx] <- overall_data$life_sq[idx] + overall_data$full_sq[idx]
+```
+
+## floor
+
+Have max floor < floor in 2136 cases. Assume floor is more accurate
+than max floor.
+
+```{r}
+qplot(floor, max_floor, data=overall_data)
+
+idx <- with(overall_data, full_sq < life_sq)
+overall_data$max_floor[idx] <- NA
+```
+
+# Material.
+
+Have only two points, one test and one train, of material==3.
+Drop.
+
+```{r}
+qplot(material, data=overall_data)
+
+idx <- with(overall_data, material == 3)
+overall_data$material[idx] <- NA
+```
+
+# Build year
+
+Build year spans a huge range, from 0 to 20052009. Assume numbers
+before 1860 are bad, as is 4965. Convert 20092005 into 2007 as a
+guess.
+
+```{r, echo=FALSE}
+qplot(build_year, data=overall_data)
+print(xtabs(~subset(overall_data, build_year < 1860 | build_year > 2017)$build_year))
+overall_data$build_year[overall_data$build_year < 1860] <- NA
+overall_data$build_year[overall_data$build_year == 20052009] <- 2007 # guess
+overall_data$build_year[overall_data$build_year == 4965] <- NA
+```
+
+
+## num rooms
+
+Less than 1 room is probably incorrect.
+
+```{r, echo=FALSE}
+qplot(num_room, data=overall_data)
+overall_data$num_room[overall_data$num_room < 1] <- NA
+```
+
+## kitchen sq
+
+Have some kitchen sq that look like build years. Use those to
+guess a build year. Have many that look the same size (or bigger than)
+the life or full sq. Clear those.
+
+```{r, echo=FALSE}
+qplot(kitch_sq, data=overall_data)
+idx <- with(overall_data, kitch_sq > 1000 & is.na(build_year))
+idx <- !is.na(idx) & idx
+overall_data$build_year[idx] <- overall_data$kitch_sq[idx]
+idx <- with(overall_data, life_sq & kitch_sq >= life_sq)
+idx <- !is.na(idx) & idx
+overall_data$kitch_sq[idx] <- NA
+idx <- with(overall_data, full_sq & kitch_sq >= full_sq)
+idx <- !is.na(idx) & idx
+overall_data$kitch_sq[idx] <- NA
+```
+
+## State
+```{r, echo=FALSE}
+plot(overall_data$state)
+# Have at least one point in state > 4 which looks odd. And turn into a factor.
+overall_data$state[overall_data$state > 4] <- NA
+overall_data$state <- factor(overall_data$state)
+```
+
+# Timestamp
+Fix timestamp into a date.
+
+```{r, echo=FALSE}
+overall_data$timestamp <- as.Date(overall_data$timestamp)
+```
+
+
+
+# Impute missing values.
+
+Add a value-is-missing column and remove near-zero variance
+columns, in prep for imputing values and transforming.
+
+```{r, echo=FALSE}
+#Function to make new _isna columns before imputation.
+isna_cols <- function(data)
+{
+    newdata <- data.frame(skipme=1:nrow(data))
+    for (col in names(data)) {
+        isna_col <- sprintf('%s_isna', col)
+        newdata[,isna_col] <- is.na(data[,col])
+    }
+    return(newdata[,-1])
+}
+overall_data <- cbind(overall_data, isna_cols(overall_data[,setdiff(names(overall_data),predict_col)]))
+
+# Re-partition data after clean up
+set.seed(20170529)
+overall_train_idx <- 1:nrow(overall_train)
+train_idx <- caret::createDataPartition(overall_data[overall_train_idx,predict_col], p=0.6, list=FALSE)
+non_train <- overall_data[setdiff(overall_train_idx, train_idx),]
+train <- overall_data[train_idx,]
+validation_idx <- caret::createDataPartition(non_train[,predict_col], p=0.5, list=FALSE)
+validation <- non_train[validation_idx,]
+test <- non_train[-c(validation_idx),]
+submission_test <- overall_data[-overall_train_idx,]
+
+sans_cols <- function(data, cols)
+{
+    return (data[,setdiff(names(data),cols)])
+}
+
+
+# Remove zero variation columns
+nzv <- names(train)[caret::nearZeroVar(train)]
+train <- sans_cols(train, nzv)
+```
+
+
+## Impute and transform
+
+Use caret::preProcess to impute.
+
+```{r, echo=FALSE}
+preproc_methods <- c('bagImpute', 'YeoJohnson') # good in theory, but too expensive
+preproc_methods <- c('medianImpute') # keep it simple
+
+preproc <- caret::preProcess(sans_cols(train, predict_col), method=preproc_methods)
+
+train_i <- predict(preproc, train)
+submission_test_i <- predict(preproc, sans_cols(submission_test, nzv))
+```
+
+## Identify any bad columns that still have NAs
+```{r, echo=FALSE}
+NA_colnames <- function(data)
+{
+    x <- sapply(names(data), function(col){sum(is.na(data[,col]))})
+    return(names(x[x > 0]))
+}
+still_NA_cols <- union(NA_colnames(train_i),
+                           NA_colnames(submission_test_i))
+```
+
+# Model
+```{r, echo=FALSE}
+library(Matrix)
+library(xgboost)
+
+cvFoldsList <- createFolds(train_i$price_doc, k=5, list=TRUE, returnTrain=FALSE)
+train_i$price_doc = log1p(as.integer(train$price_doc))
+
+train_sparse <- model.matrix(~., data=sans_cols(train_i, c(predict_col, 'id', still_NA_cols)))
+test_sparse <- model.matrix(~., data=sans_cols(submission_test_i, c(predict_col, 'id', still_NA_cols)))
+
+gc()  # garbage collection
+mtrain <- xgboost::xgb.DMatrix(data=train_sparse, label=train[,predict_col])
+mtest <- xgboost::xgb.DMatrix(data=test_sparse);
+gc()
+
+
+# XGBoost parameters
+param <- list(objective="reg:linear",
+              eval_metric = "rmse",
+              eta = .02,
+              gamma = 1,
+              max_depth = 4,
+              min_child_weight = 1,
+              subsample = .7,
+              colsample_bytree = .5
+)
+
+rounds = 300
+xgb_model <- xgb.train(data = mtrain,
+                       params = param,
+                       watchlist = list(train = dtrain),
+                       nrounds = rounds,
+                       verbose = 1,
+                       print_every_n = 10
+);gc()
+
+```
+
+
+# Predictions
+
+```{r, echo=FALSE}
+
+preds <- predict(xgb_model,mtest)
+preds <- expm1(preds)
+write.csv(data.frame(id=submission_test_i$id, price_doc=preds), strftime(Sys.time(), "submission_%Y%m%d_%H%M%S.csv"), row.names=FALSE)
+```
+
+
+
+

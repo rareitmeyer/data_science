@@ -1,0 +1,408 @@
+---
+title: "Clean By Location"
+author: "R. A. Reitmeyer"
+date: "2017-06-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+set.seed(20170630)
+
+source('common.R')
+
+library(dplyr)
+library(ggplot2)
+library(openssl)
+
+```
+
+## Load data, and group locations
+
+Note that many addresses are wrong and need fixed
+
+```{r}
+
+train <- read.csv(input_filename('train.csv'), stringsAsFactors=FALSE)
+test <- cbind(read.csv(input_filename('test.csv'), stringsAsFactors=FALSE), price_doc=NA)
+stopifnot(all(names(test) == names(train)))
+overall_data <- rbind(train, test)
+rm(train, test)
+
+bad_address_data <- read.csv(input_filename('BAD_ADDRESS_FIX.csv'), stringsAsFactors=FALSE)
+
+
+
+overall_data <- fix_bad_addresses(overall_data, bad_address_data)
+```
+
+
+## Look for idential locations
+
+Pick locations that are likely identical.
+
+```{r}
+distance_features <- c(
+    'sub_area', # technically not a distance feature
+    'ID_metro',
+    'metro_min_avto',
+    'metro_km_avto',
+    'metro_min_walk',
+    'metro_km_walk',
+    'kindergarten_km',
+    'school_km',
+    'park_km',
+    'green_zone_km',
+    'industrial_km',
+    'water_treatment_km',
+    'cemetery_km',
+    'incineration_km',
+    'railroad_station_walk_km',
+    'railroad_station_walk_min',
+    'ID_railroad_station_walk',
+    'railroad_station_avto_km',
+    'railroad_station_avto_min',
+    'ID_railroad_station_avto',
+    'public_transport_station_km',
+    'public_transport_station_min_walk',
+    'water_km',
+    'water_1line',
+    'mkad_km',
+    'ttk_km',
+    'sadovoe_km',
+    'bulvar_ring_km',
+    'kremlin_km',
+    'big_road1_km',
+    'ID_big_road1',
+    'big_road1_1line',
+    'big_road2_km',
+    'ID_big_road2',
+    'railroad_km',
+    'railroad_1line',
+    'zd_vokzaly_avto_km',
+    'ID_railroad_terminal',
+    'bus_terminal_avto_km',
+    'ID_bus_terminal',
+    'oil_chemistry_km',
+    'nuclear_reactor_km',
+    'radiation_km',
+    'power_transmission_line_km',
+    'thermal_power_plant_km',
+    'ts_km',
+    'big_market_km',
+    'market_shop_km',
+    'fitness_km',
+    'swim_pool_km',
+    'ice_rink_km',
+    'stadium_km',
+    'basketball_km',
+    'hospice_morgue_km',
+    'detention_facility_km',
+    'public_healthcare_km',
+    'university_km',
+    'workplaces_km',
+    'shopping_centers_km',
+    'office_km',
+    'additional_education_km',
+    'preschool_km',
+    'big_church_km',
+    'church_synagogue_km',
+    'mosque_km',
+    'theater_km',
+    'museum_km',
+    'exhibition_km',
+    'catering_km'
+)
+
+overall_data$location_id <- openssl::md5(apply(just_cols(overall_data, distance_features), 1, paste, collapse='|'))
+
+```
+
+
+## Ignore raion-specific features
+
+We can ignore raion-specific features.
+
+And likely a bunch more features about the neighborhood.
+
+```{r}
+raion_features <- c(
+    'area_m',
+    'raion_popul',
+    'green_zone_part',
+    'indust_part',
+    'children_preschool',
+    'preschool_quota',
+    'preschool_education_centers_raion',
+    'children_school',
+    'school_quota',
+    'school_education_centers_raion',
+    'school_education_centers_top_20_raion',
+    'hospital_beds_raion',
+    'healthcare_centers_raion',
+    'university_top_20_raion',
+    'sport_objects_raion',
+    'additional_education_raion',
+    'culture_objects_top_25',
+    'culture_objects_top_25_raion',
+    'shopping_centers_raion',
+    'office_raion',
+    'thermal_power_plant_raion',
+    'incineration_raion',
+    'oil_chemistry_raion',
+    'radiation_raion',
+    'railroad_terminal_raion',
+    'big_market_raion',
+    'nuclear_reactor_raion',
+    'detention_facility_raion',
+    'full_all',
+    'male_f',
+    'female_f',
+    'young_all',
+    'young_male',
+    'young_female',
+    'work_all',
+    'work_male',
+    'work_female',
+    'ekder_all',
+    'ekder_male',
+    'ekder_female',
+    'X0_6_all',
+    'X0_6_male',
+    'X0_6_female',
+    'X7_14_all',
+    'X7_14_male',
+    'X7_14_female',
+    'X0_17_all',
+    'X0_17_male',
+    'X0_17_female',
+    'X16_29_all',
+    'X16_29_male',
+    'X16_29_female',
+    'X0_13_all',
+    'X0_13_male',
+    'X0_13_female',
+    'raion_build_count_with_material_info',
+    'build_count_block',
+    'build_count_wood',
+    'build_count_frame',
+    'build_count_brick',
+    'build_count_monolith',
+    'build_count_panel',
+    'build_count_foam',
+    'build_count_slag',
+    'build_count_mix',
+    'raion_build_count_with_builddate_info',
+    'build_count_before_1920',
+    'build_count_1921.1945',
+    'build_count_1946.1970',
+    'build_count_1971.1995',
+    'build_count_after_1995'
+)
+
+neighborhood_features <- c(
+    'ecology',
+    'green_part_500',
+    'prom_part_500',
+    'office_count_500',
+    'office_sqm_500',
+    'trc_count_500',
+    'trc_sqm_500',
+    'cafe_count_500',
+    'cafe_sum_500_min_price_avg',
+    'cafe_sum_500_max_price_avg',
+    'cafe_avg_price_500',
+    'cafe_count_500_na_price',
+    'cafe_count_500_price_500',
+    'cafe_count_500_price_1000',
+    'cafe_count_500_price_1500',
+    'cafe_count_500_price_2500',
+    'cafe_count_500_price_4000',
+    'cafe_count_500_price_high',
+    'big_church_count_500',
+    'church_count_500',
+    'mosque_count_500',
+    'leisure_count_500',
+    'sport_count_500',
+    'market_count_500',
+    'green_part_1000',
+    'prom_part_1000',
+    'office_count_1000',
+    'office_sqm_1000',
+    'trc_count_1000',
+    'trc_sqm_1000',
+    'cafe_count_1000',
+    'cafe_sum_1000_min_price_avg',
+    'cafe_sum_1000_max_price_avg',
+    'cafe_avg_price_1000',
+    'cafe_count_1000_na_price',
+    'cafe_count_1000_price_500',
+    'cafe_count_1000_price_1000',
+    'cafe_count_1000_price_1500',
+    'cafe_count_1000_price_2500',
+    'cafe_count_1000_price_4000',
+    'cafe_count_1000_price_high',
+    'big_church_count_1000',
+    'church_count_1000',
+    'mosque_count_1000',
+    'leisure_count_1000',
+    'sport_count_1000',
+    'market_count_1000',
+    'green_part_1500',
+    'prom_part_1500',
+    'office_count_1500',
+    'office_sqm_1500',
+    'trc_count_1500',
+    'trc_sqm_1500',
+    'cafe_count_1500',
+    'cafe_sum_1500_min_price_avg',
+    'cafe_sum_1500_max_price_avg',
+    'cafe_avg_price_1500',
+    'cafe_count_1500_na_price',
+    'cafe_count_1500_price_500',
+    'cafe_count_1500_price_1000',
+    'cafe_count_1500_price_1500',
+    'cafe_count_1500_price_2500',
+    'cafe_count_1500_price_4000',
+    'cafe_count_1500_price_high',
+    'big_church_count_1500',
+    'church_count_1500',
+    'mosque_count_1500',
+    'leisure_count_1500',
+    'sport_count_1500',
+    'market_count_1500',
+    'green_part_2000',
+    'prom_part_2000',
+    'office_count_2000',
+    'office_sqm_2000',
+    'trc_count_2000',
+    'trc_sqm_2000',
+    'cafe_count_2000',
+    'cafe_sum_2000_min_price_avg',
+    'cafe_sum_2000_max_price_avg',
+    'cafe_avg_price_2000',
+    'cafe_count_2000_na_price',
+    'cafe_count_2000_price_500',
+    'cafe_count_2000_price_1000',
+    'cafe_count_2000_price_1500',
+    'cafe_count_2000_price_2500',
+    'cafe_count_2000_price_4000',
+    'cafe_count_2000_price_high',
+    'big_church_count_2000',
+    'church_count_2000',
+    'mosque_count_2000',
+    'leisure_count_2000',
+    'sport_count_2000',
+    'market_count_2000',
+    'green_part_3000',
+    'prom_part_3000',
+    'office_count_3000',
+    'office_sqm_3000',
+    'trc_count_3000',
+    'trc_sqm_3000',
+    'cafe_count_3000',
+    'cafe_sum_3000_min_price_avg',
+    'cafe_sum_3000_max_price_avg',
+    'cafe_avg_price_3000',
+    'cafe_count_3000_na_price',
+    'cafe_count_3000_price_500',
+    'cafe_count_3000_price_1000',
+    'cafe_count_3000_price_1500',
+    'cafe_count_3000_price_2500',
+    'cafe_count_3000_price_4000',
+    'cafe_count_3000_price_high',
+    'big_church_count_3000',
+    'church_count_3000',
+    'mosque_count_3000',
+    'leisure_count_3000',
+    'sport_count_3000',
+    'market_count_3000',
+    'green_part_5000',
+    'prom_part_5000',
+    'office_count_5000',
+    'office_sqm_5000',
+    'trc_count_5000',
+    'trc_sqm_5000',
+    'cafe_count_5000',
+    'cafe_sum_5000_min_price_avg',
+    'cafe_sum_5000_max_price_avg',
+    'cafe_avg_price_5000',
+    'cafe_count_5000_na_price',
+    'cafe_count_5000_price_500',
+    'cafe_count_5000_price_1000',
+    'cafe_count_5000_price_1500',
+    'cafe_count_5000_price_2500',
+    'cafe_count_5000_price_4000',
+    'cafe_count_5000_price_high',
+    'big_church_count_5000',
+    'church_count_5000',
+    'mosque_count_5000',
+    'leisure_count_5000',
+    'sport_count_5000',
+    'market_count_5000'
+    )
+
+overall_data$raion_id <- openssl::md5(apply(just_cols(overall_data, raion_features), 1, paste, collapse='|'))
+
+
+overall_data$neighborhood_id <- openssl::md5(apply(just_cols(overall_data, neighborhood_features), 1, paste, collapse='|'))
+```
+
+## Check: Do any properties have the same id?
+
+```{r}
+print(which(duplicated(overall_data$location_id)))
+duplicate_location_ids <- overall_data$location_id[duplicated(overall_data$location_id)]
+```
+
+## Check: neightbood fetaures and distance features always paired?
+
+Specifically, do we ever have a location (defined by distance features)
+with more than one neighborhood?
+
+```{r}
+location_raion_neighborhood <- unique(just_cols(overall_data, c('location_id', 'raion_id', 'neighborhood_id')))
+location_raion_neighborhood <- location_raion_neighborhood[with(location_raion_neighborhood, order(location_id,raion_id,neighborhood_id)),]
+head(location_raion_neighborhood)
+
+print("Yes!")
+print(dim(location_raion_neighborhood))
+print(nlevels(factor(overall_data$location_id)))
+write.csv(location_raion_neighborhood, 'clean_by_location_location_raion_neighborhood.csv', row.names=FALSE)
+```
+
+It's just one location_id. Look to see what is going on. How many columns are different? How many different values?
+
+```{r}
+x <- with(location_raion_neighborhood, which(location_id == location_id[which(duplicated(location_id))]))
+print(location_raion_neighborhood[x,])
+
+dissimilar_raion_features <- raion_features[sapply(raion_features, function(col) {
+    length(unique(just_col(subset(overall_data, location_id %in% location_raion_neighborhood$location_id[x]),col)))
+})>1]
+
+print(just_cols(subset(overall_data, location_id %in% location_raion_neighborhood$location_id[x]), dissimilar_raion_features))
+```
+
+That seems safe to ignore, frankly.
+
+
+
+## OK, dump out for manual checking
+
+Write out a CSV file or two so it's easier to see what is the same and
+what is not for a given location.
+
+```{r}
+overall_data <- overall_data[order(overall_data$location_id),]
+write.csv(sans_cols(overall_data, raion_features), 'clean_by_location_overall_data.csv', row.names=FALSE)
+
+just_duplicates <- sans_cols(
+    overall_data[overall_data$location_id %in% duplicate_location_ids,],
+        c(distance_features,raion_features,neighborhood_features))
+write.csv(just_duplicates, 'clean_by_location_overall_data_just_duplicates.csv', row.names=FALSE)
+```
+
+
+

@@ -1,0 +1,861 @@
+---
+title: "Clean 20170614"
+author: "rareitmeyer"
+date: "2017-06-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(ggplot2)
+library(dplyr, quietly = TRUE)
+library(caret, quietly = TRUE)
+library(openssl)
+
+source('common.R')
+source('columns.R')
+set.seed(20170630)
+
+
+```
+
+# Centralize cleanup
+
+This script combines all the cleanup that needs done
+to bring it into one central place.  (Had too many
+cleanup scripts in too many places, prior to this.)
+
+# Macro data
+
+This was (mostly) originally in model2.Rmd.
+
+The data is in three files. The macro(economic) data is something to add
+to both the test and the train records by joining on the timestamp. It makes
+more sense to do any cleanup of the macro records before joining, however,
+so will start with that.
+
+## Macro EDA
+
+```{r}
+
+input_dir = '../input'
+predict_col <- 'price_doc'
+macro <- read.csv(input_filename('macro.csv'))
+macro_drop_cols <- c()   # expect to find some columns to omit.
+
+macro$timestamp <- as.POSIXct(as.character(macro$timestamp))
+qplot(timestamp, oil_urals, data=macro, geom='line')
+qplot(timestamp, gdp_quart, data=macro, geom='line')
+qplot(timestamp, cpi, data=macro, geom='line')
+qplot(timestamp, ppi, data=macro, geom='line')
+qplot(timestamp, gdp_deflator, data=macro, geom='line')
+qplot(timestamp, balance_trade, data=macro, geom='line')
+qplot(timestamp, usdrub, data=macro, geom='line')
+qplot(timestamp, eurrub, data=macro, geom='line')
+qplot(timestamp, brent, data=macro, geom='line')
+qplot(timestamp, net_capital_export, data=macro, geom='line')
+qplot(timestamp, gdp_annual, data=macro, geom='line')
+qplot(timestamp, gdp_annual_growth, data=macro, geom='line')
+qplot(timestamp, average_provision_of_build_contract, data=macro, geom='line')
+qplot(timestamp, average_provision_of_build_contract_moscow, data=macro, geom='line')
+
+qplot(timestamp, rts, data=macro, geom='line')
+qplot(timestamp, micex, data=macro, geom='line')
+qplot(timestamp, deposits_value, data=macro, geom='line')
+qplot(timestamp, deposits_growth, data=macro, geom='line')
+qplot(timestamp, deposits_rate, data=macro, geom='line')
+qplot(timestamp, mortgage_value, data=macro, geom='line')
+qplot(timestamp, mortgage_growth, data=macro, geom='line')
+qplot(timestamp, mortgage_rate, data=macro, geom='line')
+qplot(timestamp, grp, data=macro, geom='line')
+qplot(timestamp, grp_growth, data=macro, geom='line')
+qplot(timestamp, income_per_cap, data=macro, geom='line')
+qplot(timestamp, real_dispos_income_per_cap_growth, data=macro, geom='line')
+qplot(timestamp, salary, data=macro, geom='line')
+qplot(timestamp, salary_growth, data=macro, geom='line')
+qplot(timestamp, fixed_basket, data=macro, geom='line')
+qplot(timestamp, retail_trade_turnover, data=macro, geom='line')
+qplot(timestamp, retail_trade_turnover_per_cap, data=macro, geom='line')
+qplot(timestamp, retail_trade_turnover_growth, data=macro, geom='line')
+qplot(timestamp, labor_force, data=macro, geom='line')
+qplot(timestamp, unemployment, data=macro, geom='line')
+qplot(timestamp, employment, data=macro, geom='line')
+qplot(timestamp, invest_fixed_capital_per_cap, data=macro, geom='line')
+qplot(timestamp, invest_fixed_assets, data=macro, geom='line')
+qplot(timestamp, profitable_enterpr_share, data=macro, geom='line')
+qplot(timestamp, unprofitable_enterpr_share, data=macro, geom='line')
+qplot(timestamp, share_own_revenues, data=macro, geom='line')
+qplot(timestamp, overdue_wages_per_cap, data=macro, geom='line')
+qplot(timestamp, fin_res_per_cap, data=macro, geom='line')
+qplot(timestamp, marriages_per_1000_cap, data=macro, geom='line')
+qplot(timestamp, divorce_rate, data=macro, geom='line')
+qplot(timestamp, construction_value, data=macro, geom='line')
+qplot(timestamp, invest_fixed_assets_phys, data=macro, geom='line')
+qplot(timestamp, pop_natural_increase, data=macro, geom='line')
+qplot(timestamp, pop_migration, data=macro, geom='line')
+qplot(timestamp, pop_total_inc, data=macro, geom='line')
+qplot(timestamp, childbirth, data=macro, geom='line')
+qplot(timestamp, mortality, data=macro, geom='line')
+qplot(timestamp, housing_fund_sqm, data=macro, geom='line')
+qplot(timestamp, lodging_sqm_per_cap, data=macro, geom='line')
+qplot(timestamp, water_pipes_share, data=macro, geom='line')
+# has just two values. Drop as likely noise
+macro_drop_cols <- c(macro_drop_cols, 'water_pipes_share')
+qplot(timestamp, baths_share, data=macro, geom='line')
+# has just two values. Drop as likely noise
+macro_drop_cols <- c(macro_drop_cols, 'baths_share')
+qplot(timestamp, sewerage_share, data=macro, geom='line')
+qplot(timestamp, gas_share, data=macro, geom='line')
+qplot(timestamp, hot_water_share, data=macro, geom='line')
+# has just three values. Drop as likely noise
+macro_drop_cols <- c(macro_drop_cols, 'hot_water_share')
+qplot(timestamp, electric_stove_share, data=macro, geom='line')
+qplot(timestamp, heating_share, data=macro, geom='line')
+# has just two values. Drop as likely noise
+macro_drop_cols <- c(macro_drop_cols, 'heating_share')
+qplot(timestamp, old_house_share, data=macro, geom='line')
+# has just two values. Drop as likely noise
+macro_drop_cols <- c(macro_drop_cols, 'old_house_share')
+qplot(timestamp, average_life_exp, data=macro, geom='line')
+qplot(timestamp, infant_mortarity_per_1000_cap, data=macro, geom='line')
+qplot(timestamp, perinatal_mort_per_1000_cap, data=macro, geom='line')
+qplot(timestamp, incidence_population, data=macro, geom='line')
+qplot(timestamp, rent_price_4.room_bus, data=macro, geom='line')
+qplot(timestamp, rent_price_3room_bus, data=macro, geom='line')
+qplot(timestamp, rent_price_2room_bus, data=macro, geom='line')
+qplot(timestamp, rent_price_1room_bus, data=macro, geom='line')
+qplot(timestamp, rent_price_3room_eco, data=macro, geom='line')
+qplot(timestamp, rent_price_2room_eco, data=macro, geom='line')
+# problem with Feb 2013.
+qplot(timestamp, rent_price_2room_eco, data=subset(macro, timestamp >='2013-01-01' & timestamp <= '2013-04-01'), geom='line')
+qplot(timestamp, rent_price_1room_eco, data=macro, geom='line')
+# problem with May 2013... or what looks like one.
+qplot(timestamp, rent_price_1room_eco, data=subset(macro, timestamp >='2013-02-01' & timestamp <= '2013-07-01'), geom='line')
+qplot(timestamp, load_of_teachers_preschool_per_teacher, data=macro, geom='line')
+qplot(timestamp, child_on_acc_pre_school, data=macro, geom='line')
+# Have a #! level.
+qplot(timestamp, load_of_teachers_school_per_teacher, data=macro, geom='line')
+qplot(timestamp, students_state_oneshift, data=macro, geom='line')
+qplot(timestamp, modern_education_share, data=macro, geom='line')
+# three values, mostl NA. drop.
+macro_drop_cols <- c(macro_drop_cols, 'modern_education_share')
+qplot(timestamp, old_education_build_share, data=macro, geom='line')
+# three values, mostl NA. drop.
+macro_drop_cols <- c(macro_drop_cols, 'old_education_build_share')
+qplot(timestamp, provision_doctors, data=macro, geom='line')
+qplot(timestamp, provision_nurse, data=macro, geom='line')
+qplot(timestamp, load_on_doctors, data=macro, geom='line')
+qplot(timestamp, power_clinics, data=macro, geom='line')
+qplot(timestamp, hospital_beds_available_per_cap, data=macro, geom='line')
+qplot(timestamp, hospital_bed_occupancy_per_year, data=macro, geom='line')
+qplot(timestamp, provision_retail_space_sqm, data=macro, geom='line')
+# two values, drop
+macro_drop_cols <- c(macro_drop_cols, 'provision_retail_space_sqm')
+qplot(timestamp, provision_retail_space_modern_sqm, data=macro, geom='line')
+# two values, drop
+macro_drop_cols <- c(macro_drop_cols, 'provision_retail_space_modern_sqm')
+qplot(timestamp, turnover_catering_per_cap, data=macro, geom='line')
+qplot(timestamp, theaters_viewers_per_1000_cap, data=macro, geom='line')
+qplot(timestamp, seats_theather_rfmin_per_100000_cap, data=macro, geom='line')
+qplot(timestamp, museum_visitis_per_100_cap, data=macro, geom='line')
+qplot(timestamp, bandwidth_sports, data=macro, geom='line')
+qplot(timestamp, population_reg_sports_share, data=macro, geom='line')
+qplot(timestamp, students_reg_sports_share, data=macro, geom='line')
+qplot(timestamp, apartment_build, data=macro, geom='line')
+qplot(timestamp, apartment_fund_sqm, data=macro, geom='line')
+```
+
+## Macro fixes
+
+Clean up mortgage value to create a new mortgage value montonic column.
+
+Drop a handful of columns with a very small number of values that look
+uninteresting.
+
+The rent price room eco data also looks like it has a suspicious value
+or two in it. Remove those to impute them with something more likely.
+
+
+```{r}
+# mortgage_value clearly resets every Feb 1.
+macro$mortgage_value_montonic <- macro$mortgage_value
+jan31_value <- 0
+for (year in lubridate::year(min(macro$timestamp)):lubridate::year(max(macro$timestamp))) {
+    jan31_value <- jan31_value + subset(macro, timestamp==as.POSIXct(sprintf('%d-01-31', year)))$mortgage_value
+    idx <- which(macro$timestamp >= as.POSIXct(sprintf('%d-02-01', year)) & macro$timestamp < as.POSIXct(sprintf('%d-02-01', year+1)))
+    macro[idx,'mortgage_value_montonic'] <- jan31_value + macro[idx,'mortgage_value_montonic']
+}
+# macro_drop_cols <- c('water_pipes_share', 'baths_share', 'hot_water_share', 'heating_share', 'old_house_share', 'modern_education_share', 'old_education_build_share', 'provision_retail_space_sqm', 'provision_retail_space_modern_sqm')
+for (col in macro_drop_cols) {
+    macro[,col] <- NULL
+}
+idx <- which(macro$rent_price_2room_eco == 0.1)
+macro[idx,'rent_price_2room_eco'] <- NA
+idx <- which(macro$rent_price_1room_eco == 2.31)
+macro[idx,'rent_price_1room_eco'] <- NA
+macro[,'child_on_acc_pre_school'] <- as.character(macro[,'child_on_acc_pre_school'])
+idx <- which(macro[,'child_on_acc_pre_school'] %in% c('#!'))
+macro[idx, 'child_on_acc_pre_school'] <- NA
+macro[,'child_on_acc_pre_school'] <- as.numeric(sub(',', '', macro[, 'child_on_acc_pre_school']))
+
+
+qplot(timestamp, mortgage_value_montonic, data=macro, geom='line')
+
+# confirm we've already removed the near zero variance columns
+macro_nzv <- caret::nearZeroVar(macro)
+stopifnot(length(macro_nzv) == 0)
+```
+
+
+## Macro imputation
+
+Some modeling algorithms deal poorly with missing values, so
+impute values where needed. Don't want to lose the NA-ness entirely
+however, so add a 'unknown' level to factors, and a isna column
+for each numeric column.
+
+```{r}
+
+macro_cleaned <- fe_add_isna_col_factory(macro)(macro)  # don't really need to pipeline this
+macro_imputer <- caret::preProcess(macro_cleaned, method=c('bagImpute'))
+macro_preproc <- predict(macro_imputer, macro_cleaned)
+
+print(sprintf('after imputation, have %d NAs in macro data', sum(is.na(macro_preproc))))
+macro_pt_cols <- powerTransformCols(macro_preproc)
+macro_pt <- caret::preProcess(macro_preproc[,macro_pt_cols], method='YeoJohnson')
+macro_preproc <- cbind(sans_cols(macro_preproc, macro_pt_cols), predict(macro_pt, macro_preproc[,macro_pt_cols]))
+write.csv(macro_preproc, 'clean_20170614_macro_preproc.csv', row.names=FALSE)
+save(macro_preproc, file='clean_20170614_macro_preproc.Rdata')
+```
+
+
+
+# Test and Train data
+
+Test and train data need to be "fixed" to include the bad address fix,
+released late in the contest.
+
+Much of the following was originally done in Clean_by_location.Rmd.
+
+## Load data
+
+```{r}
+
+train <- read.csv(input_filename('train.csv'), stringsAsFactors=FALSE)
+test <- cbind(read.csv(input_filename('test.csv'), stringsAsFactors=FALSE), price_doc=NA)
+stopifnot(all(names(test) == names(train)))
+overall_data <- rbind(train, test)
+rm(train, test)
+
+bad_address_data <- read.csv(input_filename('BAD_ADDRESS_FIX.csv'), stringsAsFactors=FALSE)
+
+
+
+overall_data <- fix_bad_addresses(overall_data, bad_address_data)
+```
+
+## Fix column types
+
+```{r}
+overall_data <- fix_raw_column_types(overall_data)
+```
+
+
+## Add location_id and neighborhood_id features?
+
+For exploring location specific attributes it might make sense
+to create location id and neigborhood id columns. But in general,
+these high cardinality features get in the way.
+
+```{r}
+if (FALSE) {
+    overall_data$location_id <- as.character(openssl::md5(apply(just_cols(overall_data, location_id_features), 1, paste, collapse='|')))
+    overall_data$neighborhood_id <- as.character(openssl::md5(apply(just_cols(overall_data, neighborhood_id_features), 1, paste, collapse='|')))
+}
+    
+```
+
+
+## Clean up raion-specific features
+
+All the features for a given raion should be the same, so
+clean those up separately to insure they are imputed consistently,
+like the macro data.
+
+This was originally done in Raion_Features.Rmd and Raion_Features2.Rmd.
+
+
+```{r}
+# slim raion data down into one row per raion so it is all imputed consistently.
+raion_data <- unique(just_cols(overall_data, c('sub_area', raw_raion_features)))
+```
+
+### Fix "all" columns
+
+As mentioned on the forums, the full_all columns are bad.
+
+```{r}
+qplot(raion_popul, full_all, data=raion_data)+geom_abline(slope=1, intercept=0)
+```
+
+Crib from Josep Garriga's post [https://www.kaggle.com/aralai/full-all-vs-raion-popul/notebook]
+
+```{r}
+raion_data$district <- NA
+raion_data[which(raion_data$sub_area %in% c('Krjukovo','Matushkino','Silino','Savelki','Staroe Krjukovo')),"district"]='Górod Zelenograd'
+raion_data[which(raion_data$sub_area %in% c(
+  'Golovinskoe','Koptevo','Vostochnoe Degunino','Dmitrovskoe','Timirjazevskoe',
+  'Hovrino','Zapadnoe Degunino','Beskudnikovskoe','Ajeroport','Vojkovskoe',
+  'Savelovskoe','Sokol','Horoshevskoe','Levoberezhnoe','Begovoe','Molzhaninovskoe')),"district"]='Séverny administrativny ókrug'
+raion_data[which(raion_data$sub_area %in% c(
+  'Mar\'ino','Vyhino-Zhulebino','Ljublino','Kuz\'minki','Rjazanskij','Tekstil\'shhiki',
+  'Lefortovo','Pechatniki','Juzhnoportovoe','Nizhegorodskoe','Kapotnja','Nekrasovka')),"district"]='Yugo-Vostochny administrativny ókrug'
+raion_data[which(raion_data$sub_area %in% c(
+  'Otradnoe','Bibirevo','Severnoe Medvedkovo','Jaroslavskoe','Babushkinskoe','Juzhnoe Medvedkovo',
+  'Losinoostrovskoe','Lianozovo','Alekseevskoe','Butyrskoe','Mar\'ina Roshha','Ostankinskoe',
+  'Sviblovo','Altuf\'evskoe','Rostokino','Severnoe','Marfino')),"district"]='Sévero-Vostochny administrativny ókrug'
+raion_data[which(raion_data$sub_area %in% c(
+  'Gol\'janovo','Perovo','Ivanovskoe','Veshnjaki','Bogorodskoe','Novokosino','Izmajlovo',
+  'Novogireevo','Sokolinaja Gora','Severnoe Izmajlovo','Preobrazhenskoe','Vostochnoe Izmajlovo',
+  'Kosino-Uhtomskoe','Sokol\'niki','Metrogorodok','Vostochnoe')),"district"]='Vostochny administrativny ókrug'
+raion_data[which(raion_data$sub_area %in% c(
+  'Orehovo-Borisovo Juzhnoe','Birjulevo Vostochnoe','Chertanovo Juzhnoe','Zjablikovo',
+  'Orehovo-Borisovo Severnoe','Caricyno','Nagatinskij Zaton','Chertanovo Central\'noe',
+  'Chertanovo Severnoe','Brateevo','Danilovskoe','Birjulevo Zapadnoe','Nagornoe',
+  'Nagatino-Sadovniki','Moskvorech\'e-Saburovo','Donskoe')),"district"]='Yuzhny administrativny ókrug'
+raion_data[which(raion_data$sub_area %in% c(
+  'Poselenie Shherbinka','Poselenie Desjonovskoe','Poselenie Vnukovskoe','Poselenie Sosenskoe',
+  'Poselenie Voskresenskoe','Poselenie Kokoshkino','Poselenie Moskovskij','Poselenie Rjazanovskoe',
+  'Poselenie Marushkinskoe','Poselenie Filimonkovskoe','Poselenie Mosrentgen')),"district"]='Novomoskovsky administrativny okrug'
+raion_data[which(raion_data$sub_area %in% c(
+  'Troickij okrug','Poselenie Kievskij','Poselenie Voronovskoe','Poselenie Krasnopahorskoe',
+  'Poselenie Novofedorovskoe','Poselenie Mihajlovo-Jarcevskoe','Poselenie Rogovskoe',
+  'Poselenie Pervomajskoe','Poselenie Klenovskoe','Poselenie Shhapovskoe')),"district"]='Troitsky administrativny okrug'
+raion_data[which(raion_data$sub_area %in% c(
+  'Juzhnoe Butovo','Jasenevo','Kon\'kovo','Teplyj Stan','Zjuzino','Akademicheskoe',
+  'Cheremushki','Severnoe Butovo','Lomonosovskoe','Obruchevskoe','Gagarinskoe','Kotlovka')),"district"]='Yugo-Západny administrativny ókrug'
+raion_data[which(raion_data$sub_area %in% c(
+  'Kuncevo','Mozhajskoe','Ramenki','Ochakovo-Matveevskoe','Solncevo','Troparevo-Nikulino',
+  'Fili Davydkovo','Novo-Peredelkino','Filevskij Park','Krylatskoe','Dorogomilovo',
+  'Prospekt Vernadskogo','Vnukovo')),"district"]='Západny administrativny ókrug'
+raion_data[which(raion_data$sub_area %in% c(
+  'Mitino','Horoshevo-Mnevniki','Severnoe Tushino','Strogino','Shhukino',
+  'Juzhnoe Tushino','Pokrovskoe Streshnevo','Kurkino')),"district"]='Sévero-Západny administrativny ókrug'
+raion_data[which(raion_data$sub_area %in% c(
+  'Presnenskoe','Taganskoe','Basmannoe','Hamovniki','Tverskoe', 'Meshhanskoe',
+  'Zamoskvorech\'e','Krasnosel\'skoe','Arbat','Jakimanka')),"district"]='Tsentralny administrativny ókrug'
+
+raion_data$district <- factor(raion_data$district)
+raion_data$raion_popul_male <- with(raion_data, young_male+work_male+ekder_male)
+raion_data$raion_popul_female <- with(raion_data, young_female+work_female+ekder_female)
+
+district <- raion_data %>%
+  group_by(district) %>%
+  summarize(full_all=sum(raion_popul),
+            male_f=sum(raion_popul_male),
+            female_f=sum(raion_popul_female))
+
+raion_data$full_all <- NULL
+raion_data$male_f <- NULL
+raion_data$female_f <- NULL
+
+raion_data <- merge(raion_data, district, by='district')
+```
+
+
+### Look at the raion data
+
+```{r}
+for (col in names(raion_data)[-1]) {
+    x <- raion_data[,col]
+    e <- ecdf(x)
+    p <- qplot(x, e(x))+ggtitle(sprintf("Distribution of %s across raions", col))
+    print(p)
+}
+```
+
+
+### Drop columns with only a few non-NA values
+
+If there were columns where most values were NA and only a few non-NAs, drop those columns.
+(In fact, there are no such columns.)
+
+```{r}
+non_NAs <- sapply(names(raion_data), function(col) { sum(!is.na(raion_data[,col])) })
+raion_data <- sans_cols(raion_data, names(raion_data)[non_NAs < 4])
+```
+
+### Handle NAs before making other features
+
+```{r}
+raion_trainers <- c(
+    add_is_na=fe_add_isna_col_factory,
+    impute=na_impute_factory
+    )
+```
+
+## Raion feature engineering
+
+### Misc ratios
+
+```{r raion_misc_fe}
+raion_trainers <- c(raion_trainers, misc_fe=function(train_data) {
+    return(function(data)
+        {
+        data$pop_per_kmsq <- with(data, raion_popul / (area_m / 1000 / 1000))
+        data$children_preschool_perpop <- with(data, children_preschool / raion_popul)
+        data$children_school_perpop <- with(data, children_school / raion_popul)
+        data$children_preschool_per_quota <- with(data, inf_to_2max(children_preschool / preschool_quota))
+        data$children_school_per_quota <- with(data, inf_to_2max(children_school / school_quota))
+        data$children_per_school <- with(data, inf_to_2max(children_school / school_education_centers_raion))
+        data$top_20_schools_pct <- with(data, inf_to_2max(ifelse(school_education_centers_top_20_raion > 0, school_education_centers_top_20_raion / school_education_centers_raion, 0)))
+        return(data)
+    })
+})
+```
+
+
+### Population columns
+
+```{r raion_population_fe}
+
+raion_trainers <- c(raion_trainers, population_fe=function(train_data) {
+    raion_pop_cols <- setdiff(grep('_all|_male|_female', names(train_data), value=TRUE), 'full_all')
+    return (fe_ratios_factory('raion_popul', raion_pop_cols))
+})
+```
+
+
+### Building material columns
+
+```{r raion_building_material_fe}
+
+raion_trainers <- c(raion_trainers, building_materials_fe=function(train_data) {
+    raion_building_material_cols <- c(
+        "build_count_block",
+        "build_count_wood", 
+        "build_count_frame",
+        "build_count_brick", 
+        "build_count_monolith",
+        "build_count_panel", 
+        "build_count_foam",
+        "build_count_slag",
+        "build_count_mix"
+        )
+    return(fe_ratios_factory('raion_build_count_with_material_info', raion_building_material_cols))
+})
+```
+
+
+### Building build year columns
+
+
+```{r raion_building_years_fe}
+raion_trainers <- c(raion_trainers, building_years_fe=function(train_data) {
+    raion_building_year_cols <- c(
+        "build_count_before_1920",
+        "build_count_1921.1945", 
+        "build_count_1946.1970",
+        "build_count_1971.1995", 
+        "build_count_after_1995"
+        )
+    return (fe_ratios_factory('raion_build_count_with_builddate_info', raion_building_year_cols))
+})
+```
+
+
+## Raion with applied trainers and transforms
+
+Apply all of those transformations and save the result.
+
+```{r apply_transformers}
+# district is a problem.
+# temporarily remove
+dr <- raion_data[,c('sub_area', 'district')]
+raion_data_fe <- transform_data(raion_trainers, sans_cols(raion_data, 'district'), verbose=TRUE)
+raion_data_fe <- merge(raion_data_fe, dr, by='sub_area')
+raion_data_fe$district <- factor(raion_data_fe$district)
+
+save(raion_data_fe, file='clean_20170614_raion_data_fe.Rdata')
+write.csv(raion_data_fe, file='clean_20170614_raion_data_fe.csv', row.names=FALSE)
+```
+
+
+## Chippy's lat, log locations
+
+I had spent several days trying to guess locations from the data
+without using any shape files, by simultaneously estimating the location
+of each property and each train station, metro station and bus station.
+Distance from the kremlin is also known, so I put the Kremlin as my origin
+and modeled properties as just an angle theta from the Kremlin, eliminating
+half of the proprty coordinates to estimate.
+This seemed attractive as a pure-math-no-external-data-at-all approach.
+
+In simulation (see kmts.R) and some testing (locations.Rmd), this ran a 
+long time, but did not look like it would reliably converge to a
+correct solution (modulo rotation and reflection.)
+
+On the forums, Chippy (Nigel Carpenter) opted to use shapefile 
+information and go from the distances to known-location streets, a
+much less computationally intensive approach.
+
+And he posted his lat, lon coordinates, in addition to his script.
+
+Thanks, Chippy!
+
+Unfortunately, the 'bad address' problem presumaly impacts the lat/long
+cooordinates Chippy posted, so re-do his code here to run on the
+updated data.
+
+It takes a while (~6 hours), so check to see if results already
+exist before running anything.
+
+```{r}
+
+# create raion-specific raw files; save those back to input.
+if (!file.exists('../input/Zjuzino_lat_lon.csv')) {
+    source('chippy_ll_solver.R')
+    chippy_ll_solver(overall_data)
+}
+
+# assemble raion-level input files into a clean form with each ID
+if (!file.exists('clean_20170614_lat_lon.csv') |
+    !file.exists('clean_20170614_lat_lon.Rdata')) {
+    # assemble raion-level lat and lon into one file.
+    lst_subarea <- unique(overall_data$sub_area)
+    lst_subarea <- lst_subarea[order(lst_subarea)] # sort
+    lat_lon <- NULL
+    for (sa in lst_subarea) {
+        lat_lon <- rbind(lat_lon,
+              read.csv(paste0('../input/', sa, "_lat_lon.csv"), stringsAsFactors=FALSE),
+              stringsAsFactors=FALSE)
+    }
+    # save location counts for map below.
+    location_counts <- lat_lon
+    write.csv(location_counts, 'clean_20170614_lat_lon_counts.csv', row.names=FALSE)
+    save(location_counts, file='clean_20170614_lat_lon_counts.Rdata')
+    
+    # merge lat_lon with the row IDs.
+    overall_data$key <- with(overall_data, paste(mkad_km, ttk_km, sadovoe_km, sub_area, sep=":"))
+    lat_lon <- merge(just_cols(overall_data, c(id_col, 'timestamp', 'key')),
+                     just_cols(lat_lon, c('key', 'lat', 'lon', 'tolerance_m')), 
+                     by='key', all.x=TRUE)
+    
+    overall_data$key <- NULL
+    lat_lon <- lat_lon[order(just_col(lat_lon, id_col)),]
+    write.csv(lat_lon, 'clean_20170614_lat_lon.csv', row.names=FALSE)
+    save(lat_lon, file='clean_20170614_lat_lon.Rdata')
+}
+
+# merge lat, lon into overall_data
+load('clean_20170614_lat_lon.Rdata')
+overall_data <- merge(overall_data, just_cols(lat_lon, c(id_col, 'lat', 'lon', 'tolerance_m')))
+```
+
+### Check map
+
+Look at counts.
+
+```{r}
+library(leaflet)
+library(rgdal)
+library(rjson)
+
+load('clean_20170614_lat_lon_counts.Rdata')
+
+print(summary(unique(location_counts$count)))
+location_counts_ecdf_x <- unique(location_counts$count)
+location_counts_ecdf_x <- location_counts_ecdf_x[order(location_counts_ecdf_x)]
+location_counts_ecdf_y <- ecdf(location_counts$count)(location_counts_ecdf_x)
+qplot(location_counts_ecdf_x, location_counts_ecdf_y) + ggtitle('ECDF of properties at exact same location')
+
+print(just_cols(subset(location_counts, count > 250), c('count', 'sub_area', 'lat', 'lon', 'tolerance_m')))
+
+pal <- colorNumeric(palette = "RdYlGn", domain = c(0,1000), reverse= TRUE)
+
+shp_moscow_adm <- rgdal::readOGR(dsn = "../input/sberbankmoscowroads", layer = "moscow_adm", verbose=FALSE)
+# Make data frame with centroids. I'm sure there is a better way to do this.
+raion_centroids <- do.call(rbind.data.frame, lapply(1:146, function(i) { 
+    c(coordinates(rgeos::gCentroid(shp_moscow_adm[i,])), name=as.character(shp_moscow_adm[i,]$RAION)) 
+    }))
+names(raion_centroids) <- c('x','y','name')
+raion_centroids$x <- as.numeric(as.character(raion_centroids$x))
+raion_centroids$y <- as.numeric(as.character(raion_centroids$y))
+raion_centroids$name <- as.character(raion_centroids$na)
+
+# make a GeoJSON form of the shapefile if we don't have one already.
+if(!file.exists('shp_moscow_adm.GeoJSON')) {
+    rgdal::writeOGR(shp_moscow_adm, dsn='shp_moscow_adm.GeoJSON', driver='GeoJSON', layer=1)
+}
+gj <- rjson::fromJSON(file='shp_moscow_adm.GeoJSON')
+gj_names <- sapply(gj$features, function(f) {f$properties$RAION})
+r <- leaflet::leaflet(data=location_counts) %>%
+    leaflet::addGeoJSON(gj) %>%
+    leaflet::addLabelOnlyMarkers(lng=raion_centroids$x, lat=raion_centroids$y, 
+                        label=raion_centroids$name, 
+                        labelOptions=labelOptions(
+                            noHide=TRUE,
+                            textOnly=TRUE)) %>%
+    leaflet::addCircles(lat=~lat, lng=~lon, col=~pal(count), fill=TRUE, weight=10, label=~paste0("Count: ", count)) %>%
+    leaflet::addLegend("topright", pal=pal, values=~count, title = "Property count", opacity=0.8)
+
+r  # Print the map
+```
+
+
+
+# Property-specific feature clean up
+
+Looking at the properties, there are many features that are location-specific, 
+like all the distances, and the "neighborhood" information about nearly cafes et al.
+There are also many raion-specific features, common across the whole raion.
+
+This leaves fairly few features that are specific to the property itself, and
+it's good to look at those:
+
+* full_sq
+* life_sq
+* floor
+* max_floor
+* material
+* build_year
+* num_room
+* kitch_sq
+* state
+* product type
+
+
+
+### full_sq and life_sq
+
+Have life sq < 5 or full sq < 5 is probably an error. Remove to impute later.
+Also have full sq < life sq, usually by a lot. *Guess* that this is a coding
+error and full is accidentally recorded as the extra.
+
+
+```{r}
+qplot(life_sq, full_sq, data=overall_data)+scale_x_log10()+scale_y_log10()
+overall_data$life_sq[overall_data$life_sq < 5] <- NA
+overall_data$full_sq[overall_data$full_sq < 5] <- NA
+
+
+idx <- overall_data$full_sq < overall_data$life_sq
+idx <- !is.na(idx) & idx
+overall_data$full_sq[idx] <- overall_data$life_sq[idx] + overall_data$full_sq[idx]
+```
+
+### floor and max_floor
+
+Have max floor < floor in 2136 cases. Assume floor is more accurate
+than max floor.
+
+```{r}
+qplot(floor, max_floor, data=overall_data)
+
+idx <- with(overall_data, !is.na(max_floor) & !is.na(floor) & max_floor < floor)
+overall_data$max_floor[idx] <- overall_data$floor[idx]
+```
+
+### Material.
+
+Have only two points, one test and one train, of material==3.
+Drop.
+
+```{r}
+qplot(material, data=overall_data)
+
+idx <- with(overall_data, material == 3)
+overall_data$material[idx] <- NA
+```
+
+### Build year
+
+Build year spans a huge range, from 0 to 20052009. Assume numbers
+before 1860 are bad, as is 4965. Convert 20092005 into 2007 as a
+guess.
+
+One of the discussion pages says that properties are sometimes pre-sold,
+so allow that.
+
+```{r}
+print(summary(overall_data$build_year))
+print(xtabs(~subset(overall_data, build_year < 1860 | build_year > 2017)$build_year))
+qplot(build_year, data=overall_data)+scale_x_continuous(limits=c(1860, 2020))
+
+overall_data$build_year[overall_data$build_year < 1860] <- NA
+overall_data$build_year[overall_data$build_year == 20052009] <- 2007 # guess
+overall_data$build_year[overall_data$build_year == 4965] <- NA
+```
+
+
+### num rooms
+
+Less than 1 room is probably incorrect.
+
+```{r}
+print(summary(overall_data$num_room))
+qplot(num_room, data=overall_data)
+overall_data$num_room[overall_data$num_room < 1] <- NA
+```
+
+
+### kitchen sq
+
+Have some kitchen sq that look like build years. Use those to
+guess a build year. Have many that look the same size (or bigger than)
+the life or full sq. Clear those.
+
+```{r}
+print(summary(overall_data$kitch_sq))
+qplot(kitch_sq, data=overall_data)
+idx <- with(overall_data, kitch_sq > 1000 & is.na(build_year))
+idx <- !is.na(idx) & idx
+overall_data$build_year[idx] <- overall_data$kitch_sq[idx]
+idx <- with(overall_data, life_sq & kitch_sq >= life_sq)
+idx <- !is.na(idx) & idx
+overall_data$kitch_sq[idx] <- NA
+idx <- with(overall_data, full_sq & kitch_sq >= full_sq)
+idx <- !is.na(idx) & idx
+overall_data$kitch_sq[idx] <- NA
+```
+
+### State
+
+We have one state of 33. That's probably a typo for 3, so replace 33 with 3 and
+recreate the factor to drop the unused level.
+
+```{r}
+plot(overall_data$state)
+
+overall_data$state[overall_data$state == '33'] <- '3'
+overall_data$state <- factor(overall_data$state)
+```
+
+
+### Product Type
+```{r}
+plot(overall_data$product_type)
+```
+
+
+## Property specific feature imputation
+
+
+```{r}
+
+# create a 'dispostion' column with at least 'train' and 'submission' levels.
+overall_data$disposition <- NA
+overall_data$disposition[!is.na(overall_data$price_doc)] <- 'train'
+overall_data$disposition[is.na(overall_data$price_doc)] <- 'submission'
+
+
+pipeline <- c(drop_nzv=function(train_data) {
+    fe_drop_nzv_cols_factory(train_data, keep_cols=c(predict_col, id_col))
+})
+pipeline <- c(pipeline, impute_property_features=function(train_data) {
+    # impute property features here. Use those features, plus the lat and lon
+    property_cols <- c('timestamp', raw_property_features, 'lat', 'lon')
+    train_property <- just_cols(train_data, c(id_col, property_cols))
+    print("train for imputing property features with columns....")
+    print(names(train_property))
+    print(dim(train_property))
+          
+    imputer <- na_impute_factory(
+        train_property, predict_col=predict_col,
+        drop_col='disposition',
+        impute_on_just_na_cols=FALSE)
+    function(data) {
+        data_property <- just_cols(data, c(id_col, property_cols))
+        print("apply imputing to property features with columns....")
+        print(names(data_property))
+        print(dim(data_property))
+        data_property <- imputer(data_property)
+        data <- cbind(sans_cols(data, property_cols), data_property)
+        return (data)
+    }
+})
+
+```
+
+
+## Property specific feature engineering
+
+* add a sold-month column for monthly/seasonal trends
+* add a sold-year column for year progression
+* add a sold year month column for a finer grained progression
+* Add a 'age at sale' column, which can be negative if property pre-sold
+
+* Add a 'floors above' column with the number of floors above to
+* Add a 'floor percentage' column
+
+```{r}
+library(lubridate)
+pipeline <- c(pipeline, add_date_features=function(train_data) {
+    function(data) {
+        data$sold_year <- with(data, lubridate::year(timestamp))
+        data$sold_month <- with(data, lubridate::month(timestamp))
+        data$sold_ym <- with(data, paste(lubridate::year(timestamp), lubridate::month(timestamp), sep='-'))
+        data$age_at_sale <- with(data, build_year-lubridate::year(timestamp))
+        return (data)
+    }
+})
+
+pipeline <- c(pipeline, add_floors_features=function(train_data) {
+    function(data) {
+        data$floors_above <- with(data, max_floor - floor)
+        data$floor_pct <- with(data, floor / max_floor * 100.0)
+        return(data)
+    }   
+})
+
+```
+
+
+
+## General scaling
+
+Scaling is not important in a tree based model, so omit (defer?)
+
+```{r}
+if (FALSE) {
+    pipeline <- c(pipeline, scale=function(train_data) {
+        scale_preprocessor_factory(train_data, predict_col=predict_col, 
+                                   drop_cols=c(predict_col, 'id', 'disposition'))
+    })
+}
+```
+
+
+## Apply transformations
+
+
+
+```{r}
+# fix the data
+overall_data_fe <- transform_data(pipeline,
+               subset(overall_data, disposition=='train'),
+               subset(overall_data, disposition!='skip'),
+               verbose=TRUE,
+               predict_col=predict_col
+)[[2]]
+```
+
+
+## Merge macro and raion data
+
+```{r}
+
+overall_data_fe <- merge(sans_cols(overall_data_fe, setdiff(names(raion_data_fe), 'sub_area')), 
+                         raion_data_fe, by='sub_area')
+# reconfirm timestamps are compatible
+macro_preproc$timestamp <- as.Date(macro_preproc$timestamp)
+overall_data_fe$timestamp <- as.Date(overall_data_fe$timestamp)
+overall_data_fe <- merge(overall_data_fe, macro_preproc, by='timestamp')
+
+save(overall_data_fe, file='clean_20170614_overall_data_fe.Rdata')
+write.csv(overall_data_fe, file='clean_20170614_overall_data_fe.csv', row.names=FALSE)
+```
+
+
+

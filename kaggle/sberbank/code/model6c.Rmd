@@ -1,0 +1,146 @@
+---
+title: "Model6b.Rmd"
+author: "R. A. Reitmeyer"
+date: "2017-06-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(xgboost)
+library(dplyr)
+library(ggplot2)
+library(stringr)
+
+source('common.R')
+
+set.seed(20160630)
+
+```
+
+## Drop imputation
+
+Looking at other people's scripts, imputation is not important, so try dropping it.
+
+```{r}
+load('model3_overall_data_fe.Rdata')
+
+unimpute <- function(data, na_value=NaN)
+{
+    columns <- stringr::str_match(names(data), '^(.*)_isna$')
+    columns <- columns[!is.na(columns[,1]),]
+    for (i in 1:nrow(columns)) {
+        if (columns[i,2] %in% names(data)) {
+            just_col(data, columns[i,2])[just_col(data, columns[i,1])] <- NaN
+        } else {
+            print(sprintf("warning: column %s is missing", columns[i,2]))
+        }
+    }
+    data <- sans_cols(data, columns[,1])
+    return (data)
+}
+
+overall_data_deimputed <- unimpute(overall_data_fe)
+```
+
+## Drop some investment rows
+
+Looking at Boran's script for more successful CV, try dropping the
+same investment rows he dropped.
+
+```{r}
+load('boran_naive_xbg_sample_starter_train_ids.Rdata')
+overall_data_deimputed <- overall_data_deimputed[which(overall_data_deimputed$id %in% train_ids | overall_data_deimputed$disposition == 'submission'),]
+```
+
+
+## Build a raw XGB cv instance and use it
+
+```{r}
+# transform y
+overall_data_deimputed$logp1_price_doc <- log(overall_data_deimputed$price_doc+1)
+
+skipcols <- c('id', 'disposition', 'price_doc', 'logp1_price_doc')
+simple_to_X <- function(data, disposition, skip_cols) {
+    model_matrix_basic_handle_NA(sans_cols(just_disposition(data, disposition), skip_cols))
+}
+x_train <- simple_to_X(overall_data_deimputed, 'train', skipcols)
+x_test <- simple_to_X(overall_data_deimputed, 'test', skipcols)
+x_validation <- simple_to_X(overall_data_deimputed, 'validation', skipcols)
+x_skip <- simple_to_X(overall_data_deimputed, 'skip', skipcols)
+x_submission <- simple_to_X(overall_data_deimputed, 'submission', skipcols)
+
+
+y_train <- just_col(just_disposition(overall_data_deimputed, 'train'), 'logp1_price_doc')
+y_test <- just_col(just_disposition(overall_data_deimputed, 'test'), 'logp1_price_doc')
+y_validation <- just_col(just_disposition(overall_data_deimputed, 'validation'), 'logp1_price_doc')
+y_skip <- just_col(just_disposition(overall_data_deimputed, 'skip'), 'logp1_price_doc')
+
+
+x_all <- rbind(x_train, x_test, x_validation, x_skip)
+y_all <- c(y_train, y_test, y_validation, y_skip)
+
+```
+
+
+## Try omitting serpate train / test / validation sets and model on all with cv
+
+
+```{r}
+xgb_params = list(
+  set.seed = 0,
+  colsample_bytree = 0.7,
+  subsample = 0.7,
+  eta = 0.075,
+  objective = 'reg:linear',
+  max_depth = 6,
+  num_parallel_tree = 1,
+  min_child_weight = 1,
+  base_score = 15.8123
+)
+
+set.seed(0)
+res = xgb.cv(
+    params=xgb_params,
+    data=x_all,
+    label=y_all,
+    nrounds=2000,
+    nfold=10,
+    early_stopping_rounds=20,
+    print_every_n = 10,
+    verbose=1,
+    maximize=F,
+    missing=NaN)
+
+```
+
+
+## Pick best res
+
+```{r}
+best_nrounds <- which.min(with(res, test.rmse.mean + test.rmse.std))
+print(with(res,sprintf('CV score is %f+%f=%f best, %f+%f=%f typical', 
+      test.rmse.mean[best_nrounds], test.rmse.std[best_nrounds],
+      test.rmse.mean[best_nrounds]+test.rmse.std[best_nrounds],
+      mean(test.rmse.mean), mean(test.rmse.std), mean(test.rmse.mean+test.rmse.std))))
+
+```
+
+## Final prediction using all data
+
+Unlike in model6, train the final on the 'skip' as well.
+
+```{r}
+
+xgb_model_all <- xgb.train(params=xgb_params, xgb.DMatrix(x_all, label=y_all, missing=NaN), nrounds=best_nrounds)
+
+y_all_pred <- predict(xgb_model, xgb.DMatrix(x_all, missing=NaN))
+print(sprintf("All RMLSE is %f", rmse(y_all, y_all_pred)))
+
+y_submission_pred <- predict(xgb_model, xgb.DMatrix(x_submission, missing=NaN))
+write.csv(data.frame(id=just_disposition(overall_data_fe, 'submission')$id,
+                     price_doc=exp(y_submission_pred)-1), 
+          strftime(Sys.time(), "submission_%Y%m%d_%H%M%S.csv"), row.names=FALSE)
+
+```

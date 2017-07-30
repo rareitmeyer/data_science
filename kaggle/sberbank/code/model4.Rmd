@@ -1,0 +1,174 @@
+---
+title: "model4"
+author: "R. A. Reitmeyer"
+date: "2017-05-29"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+# Extending model 3 with PCA
+
+Model 3 worked, but was disappointing as not scoring particularly well.
+So try Y-aware PCA to eliminate near-redundant columns.
+
+
+## Load the model3 data
+
+```{r load}
+source('common.R')
+
+predict_col <- 'price_doc'
+load('model3_overall_data_fe.Rdata')
+
+# transform predictions
+just_col(overall_data_fe, predict_col) <- log1p(just_col(overall_data_fe, predict_col))
+```
+
+## Y-Aware PCA
+
+Use Y-Aware PCA to transform.
+
+```{r}
+# Make a transformer for Y-aware PCA. Pass in the training
+# data and minimum variance.
+#
+# Assumes predict_col is known apriori.
+
+pipeline <- c(yaware_pca=function(train_data) {
+    yaware_pca_factory(train_data, 0.999)
+})
+
+skipcols <- c('id', 'disposition')
+overall_data_pca <- transform_data(pipeline,
+               subset(overall_data_fe, disposition=='train'),
+               subset(overall_data_fe, disposition!='skip'),
+               verbose=TRUE
+               )[[2]]
+save(overall_data_pca, file='model4_overall_data_pca.Rdata')
+```
+
+
+# Model with XGBoost
+
+Up the number of rounds 10x over model3 to see if that helps.
+
+```{r}
+library(caret)
+library(xgboost)
+library(foreach)
+library(doParallel)
+    
+parallelism <- 3
+doParallel::registerDoParallel(parallelism)
+foreach::getDoParWorkers()
+    
+train_X <- to_X(just_disposition(overall_data_pca$X, 'train'),
+                label_col=predict_col, skipcols=skipcols)
+test_X <- to_X(just_disposition(overall_data_pca$X, 'test'),
+                label_col=predict_col, skipcols=skipcols)
+validation_X <- to_X(just_disposition(overall_data_pca$X, 'validation'),
+                label_col=predict_col, skipcols=skipcols)
+submission_X <- to_X(just_disposition(overall_data_pca$X, 'submission'),
+                skipcols=c(predict_col, skipcols))
+
+# XGBoost parameters
+param <- list(objective="reg:linear",
+              eval_metric = "rmse",
+              eta = .02,
+              gamma = 1,
+              max_depth = 4,
+              min_child_weight = 1,
+              subsample = .7,
+              colsample_bytree = .5
+)
+
+ctrl <- caret::trainControl(method='repeatedcv',
+             number=5,
+             allowParallel=TRUE)
+grid <- expand.grid(
+    nrounds=3000,
+    eta=c(0.01, 0.02, 0.03, 0.04, 0.06),
+    gamma=1,
+    max_depth=c(4,6,8,10),
+    subsample=c(0.6, 0.7, 0.8),
+    colsample_bytree=c(0.4, 0.5, 0.6),
+    min_child_weight=1
+)
+
+set.seed(20170630)
+    
+
+
+
+rounds = 3000
+
+xgb.tune <- caret::train(x=sans_cols(just_disposition(overall_data_pca$X, 'train'), c(predict_col, skipcols)),
+                         y=just_col(just_disposition(overall_data_pca$X, 'train'), predict_col),
+                         method='xgbTree',
+                         metric="RMSE",
+                         trControl=ctrl,
+                         tuneGrid=grid)
+
+
+#xgb_model <- xgb.train(data = train_X$X,
+#                       params = param,
+#                       watchlist = list(train = train_X$X),
+#                       nrounds = rounds,
+#                       verbose = 0,
+#                       print.every.n = 25
+#)
+
+
+```
+
+## Top Features
+
+Look at the top feature importances.
+
+```{r}
+
+fi <- xgb.importance(train_X$names, model=xgb_model)
+head(fi,10)
+
+xgb.plot.importance(fi[1:10,])
+```
+
+
+
+
+## Validation
+
+```{r}
+score_fn <- function(actual, predicted, data_is_log1_already=TRUE)
+{
+  return (sqrt(1/length(actual)*sum((actual-predicted)^2)))
+}
+train_preds <- predict(xgb_model, train_X$X)
+print(sprintf('train score: %f', score_fn(just_col(subset(overall_data_fe, disposition=='train'),predict_col),train_preds)))
+
+test_preds <- predict(xgb_model, test_X$X)
+print(sprintf('test score: %f', score_fn(just_col(subset(overall_data_fe, disposition=='test'),predict_col),test_preds)))
+
+valid_preds <- predict(xgb_model, validation_X$X)
+print(sprintf('validation score: %f', score_fn(just_col(subset(overall_data_fe, disposition=='validation'),predict_col),valid_preds)))
+
+```
+
+
+# submission predictions
+
+```{r}
+
+preds <- predict(xgb_model,submission_X$X)
+preds <- expm1(preds)
+write.csv(data.frame(id=subset(overall_data_fe, disposition=='submission')$id, price_doc=preds), strftime(Sys.time(), "submission_%Y%m%d_%H%M%S.csv"), row.names=FALSE)
+```
+
+
+
+

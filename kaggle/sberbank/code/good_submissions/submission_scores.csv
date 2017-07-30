@@ -1,0 +1,11 @@
+"date","model file","git rev-parse HEAD","submission filename","local validation score","Public LB score","improvement?","LB rank","LB size","LB %","winning LB score","elapsed time (seconds)","max memory (GB)","Other notes"
+,"model.Rmd",,"submission_20170508_182141.csv",,"failed :(",,,,,,,,
+"05/08/17 06:40 PM","model.Rmd","4eec280130ea00ac1fa2ac2f1c651d01096b9d3a","submission_20170508_184001.csv",,0.33497,FALSE,797,1100,0.7245454545,0.3108,,,
+"20170516_004934","model.Rmd","cc9a5d43b80a57f3d8a818685068ee8d754af083","submission_20170516_004934.csv",0.465015,0.33383,TRUE,1066,1582,0.6738305942,0.30788,440,4,
+"20170529_173806","model3.Rmd","e96fd61203d0744da8cfba38d46a9af218ff55b8","submission_20170529_173806.csv",0.204174,7.88577,FALSE,1658,2322,0.714039621,0.30668,,,"accidentally twice-transformed: scale auto-scaled it and then applied log1p/expm1 without undoing auto-scale."
+"20170529_181711","model3.Rmd","b8a323e5bb6f88659bae454f0c9bf0c19bd371a1","submission_20170529_181711.csv",0.439701,0.3784,FALSE,1658,2323,0.7137322428,0.30668,,,"fixed auto-scaling, but still not a good score."
+"06/09/17 04:42 PM","model4.Rmd","0f85d87e9a1ba99d696f0499807105b1e00caa62","submission_20170609_164229.csv",0.461412,0.40481,FALSE,2050,2781,0.7371449119,0.30123,,,
+"06/11/17 12:27 PM","model5.Rmd","54b1b0b174a34cd1d53b34f5e4a0b387b660a58e","submission_20170610_193037.csv",0.425914,0.33383,FALSE,2118,2858,0.7410776767,0.30075,,,
+06/13/17 09:51 PM,"model6.Rmd","f00f359ad4a46043841c0a0f18964299d8f0988d","submission_20170613_214523.csv",0.344749,0.35835,FALSE,2182,2946,0.7406653089,0.30075,,,
+06/12/17 11:21 PM,"model6b.Rmd","b8fbdd8cf0de886b954c3bf68940933cf406ec02","submission_20170613_222707.csv",0.344591,0.35835,FALSE,2182,2946,0.7406653089,0.30075,,,
+06/12/17 10:31 PM,"model6c.Rmd","0b50724ddce0e0e7dd4a3697425bf051e62da30a","submission_20170613_231405.csv",0.339493,0.36162,FALSE,2184,2947,0.7410926366,0.30075,,,

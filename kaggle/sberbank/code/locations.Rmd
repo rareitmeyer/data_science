@@ -1,0 +1,1363 @@
+---
+title: "location experiment"
+author: "R. A. Reitmeyer"
+date: "2017-05-19"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(ggplot2)
+library(igraph)
+library(deldir)
+library(dplyr)
+
+knitr::opts_chunk$set(echo = TRUE)
+options(datatable.WhenJisSymbolThenCallingScope=TRUE)
+
+# some basic functions
+
+# data frame without some specific columns
+sans_cols <- function(data, cols)
+{
+    keep_cols <- setdiff(names(data),cols)
+    if ('data.table' %in% class(data)) {
+        return (data[,keep_cols,with=FALSE])
+    } else {
+        return (data[,keep_cols])
+    }
+}
+
+
+
+# a detach-library routine stolen from stack overflow:
+# http://stackoverflow.com/questions/6979917/how-to-unload-a-package-without-restarting-r
+detach_package <- function(pkg, character.only = FALSE)
+{
+  if(!character.only)
+  {
+    pkg <- deparse(substitute(pkg))
+  }
+  search_item <- paste("package", pkg, sep = ":")
+  while(search_item %in% search())
+  {
+    detach(search_item, unload = TRUE, character.only = TRUE)
+  }
+}
+
+# Replace the names of one or more columns in a data frame
+# and return it.
+replace_colnames <- function(data, old_names, new_names)
+{
+    if (length(old_names) == 1) {
+        if (!(old_names %in% names(data))) {
+            stop("Old name is not in the data")
+        }
+    } else if (length(old_names) > 1) {
+        if (length(setdiff(old_names, names(data))) > 0) {
+            stop("Not all old names are in the data")
+        }
+    } else {
+        stop("No names to replace")
+    }
+
+    idx <- sapply(old_names, function(n){ which(n==names(data)) })
+    names(data)[idx] <- new_names
+    return(data)
+}
+
+# assign columns to a data frame and return it.
+with_colnames <- function(data, colnames)
+{
+    data <- as.data.frame(data)
+    names(data) <- colnames
+    return(data)
+}
+
+# Make an identifer name out of a prefix and a suffix,
+# gracefully handing if one or the other is missing.
+make_name <- function(prefix=NULL, suffix=NULL, sep='_')
+{
+    if (!is.null(prefix) && is.null(suffix)) {
+        retval <- prefix
+    }
+    if (!is.null(suffix) && is.null(prefix)) {
+        retval <- suffix
+    }
+    if (!is.null(prefix) && !is.null(suffix)) {
+        retval <- paste(prefix, suffix, sep=sep)
+    }
+    return (retval)
+}
+
+# return translation x, translation y, rotation theta and sign s
+# needed to 'standardize' a set of positions
+find_standardize_steps <- function(
+    data, col_prefix=NULL, name_col='name',
+    center_name='C', center_x=NULL, center_y=NULL,
+    m1_name='M1', m1_theta=NULL,
+    m2plus_names=c('M2', 'M3', 'M4'), m2_sign=NULL)
+{
+    colnames <-  c(name_col,make_name(col_prefix, c('x','y')))
+    if ('data.table' %in% class(data)) {
+        d <- data[,colnames,with=FALSE]
+    } else {
+        d <- data[,colnames]
+    }
+    names(d) <- c('name','x', 'y')
+
+    # standardize by putting C at 0,0
+    if (!is.null(center_name)) {
+        center <- subset(d, name == 'C')[1,]
+        center_x <- center$x
+        center_y <- center$y
+    }
+    d$x <- d$x - center$x
+    d$y <- d$y - center$y
+
+    # and put metro 1 due east.
+    d$r <- with(d, sqrt(x^2 + y^2))
+    d$t <- with(d, (atan2(y, x)+2*pi)%%(2*pi))
+    if (!is.null(metro1_name)) {
+        m1_theta <- subset(d, name='M1')[1,]
+    }
+    d$t <- d$t - m1$t
+    d$x <- with(d, r*cos(t))
+    d$y <- with(d, r*sin(t))
+
+    # finally, flip so first metro after 1 with non-zero y
+    # is in top half plane.
+    if (!is.null(m2plus_names)) {
+        for (m in sprintf('M%d', 2:num_metro)) {
+           m2_sign <- sign(subset(d, name==m)[1,'y'])
+            if (m2_sign == 0) {
+                continue
+            }
+            if (m2_sign < 0) {
+                d$y <- -1 * d$y
+                d$t <- -1 * d$t
+            }
+            break
+        }
+    }
+    return (c(center_x, center_y, m1_theta, m2_sign))
+}
+
+# translate, rotate and flip based on a series of steps
+# from find_standardize_steps
+apply_standardize_steps <- function(data, steps, col_prefix='actual')
+{
+    x_col <- make_name(col_prefix, 'x')
+    y_col <- make_name(col_prefix, 'y')
+    r_col <- make_name(col_prefix, 'r')
+    t_col <- make_name(col_prefix, 't')
+    data[,x_col] <- data[,x_col] - steps[1]
+    data[,y_col] <- data[,y_col] - steps[2]
+    data[,r_col] <- sqrt(data[,x_col]^2+data[,y_col]^2)
+    data[,t_col] <- (atan2(data[,y_col], data[,x_col])+2*pi)%%(2*pi)
+    data[,t_col] <- data[,t_col] - steps[3]
+    data[,x_col] <- data[,r_col]*cos(data[,t_col])
+    data[,y_col] <- data[,r_col]*sin(data[,t_col])
+    if (steps[4] < 0) {
+        data[,y_col] <- -1*data[,y_col]
+        data[,t_col] <- -1*data[,t_col]
+    }
+    # make t col positive on range 0..2pi
+    data[,t_col] <- (data[,t_col]+4*pi)%%(2*pi)
+    return(data)
+}
+
+
+```
+
+# Let's look at locations
+
+Suppose we have 1000 homes, and know their distances to
+the city center, to 20 metro stations, and 10 train stations.
+
+Can we get X and Y coordinates for the metro stations and
+train stations, up to rotation about the city center?
+
+## Simulate data
+
+```{r init}
+set.seed(20170519) # for repeatability
+
+num_house <- 200
+num_metro <- 15
+num_train <- 10
+num_bus <- 10
+
+make_name_metro <- function(id) { sprintf('M%d',id) }
+make_name_train <- function(id) { sprintf('T%d',id) }
+make_name_bus <- function(id) { sprintf('B%d',id) }
+
+houses <- data.frame(house_id=1:num_house, actual_x=10*rnorm(num_house), actual_y=10*rnorm(num_house))
+city_center <- data.frame(id=0, actual_x=0, actual_y=0)
+metro_stations <- data.frame(metro_id=1:num_metro, actual_x=10*rnorm(num_metro), actual_y=10*rnorm(num_metro))
+train_stations <- data.frame(train_id=1:num_train, actual_x=10*rnorm(num_train), actual_y=10*rnorm(num_train))
+bus_stations <- data.frame(bus_id=1:num_bus, actual_x=10*rnorm(num_bus), actual_y=10*rnorm(num_bus))
+
+find_rt <- function(thing=NULL, house=NULL, thing_name='house', col_prefix='actual')
+{
+    x_col <- paste(col_prefix, 'x', sep='_')
+    y_col <- paste(col_prefix, 'y', sep='_')
+    r_col <- paste(col_prefix, 'r', sep='_')
+    t_col <- paste(col_prefix, 't', sep='_')
+    if (!is.null(thing)) {
+        retval <- data.frame(
+            r=sqrt(thing[,x_col]^2+thing[,y_col]^2),
+            t=(atan2(thing[,y_col],thing[,x_col])+2*pi)%%(2*pi)
+        )
+        names(retval) <- c(r_col, t_col)
+    } else if (!is.null(house) && thing_name %in% c('metro', 'train', 'bus')) {
+        num_thing <- ifelse(thing_name == 'metro', num_metro,
+                            ifelse(thing_name == 'train', num_train, num_bus))
+        id_col <- paste(thing_name, 'id', sep='_')
+        km_col <- paste(thing_name, 'km', sep='_')
+        no_thing <- setdiff(1:num_thing, unique(house[,id_col]))
+
+        thing_r <- sapply(1:num_thing, function(i) {
+            mean(house[house[,id_col]==i,'center_km'])
+        })
+        thing_r[no_thing] <- mean(house$center_km)
+        retval <- data.frame(r=thing_r, t=NA)
+        names(retval) <- c('est_r', 'est_t')
+    }
+
+    return(retval)
+}
+
+# just for sanity checking
+simple_dist <- function(r1, r2, c1='actual', c2='actual') {
+    x1_col <- make_name(c1, 'x')
+    y1_col <- make_name(c1, 'y')
+    x2_col <- make_name(c2, 'x')
+    y2_col <- make_name(c2, 'y')
+    if ('data.table' %in% class(r1)) {
+        x1 <- r1[,x1_col,with=F]
+        y1 <- r1[,y1_col,with=F]
+    } else {
+        x1 <- r1[,x1_col]
+        y1 <- r1[,y1_col]
+    }
+    if ('data.table' %in% class(r2)) {
+        x2 <- r2[,x2_col,with=F]
+        y2 <- r2[,y2_col,with=F]
+    } else {
+        x2 <- r2[,x2_col]
+        y2 <- r2[,y2_col]
+    }
+
+    return (sqrt((x2-x1)^2+
+                (y2-y1)^2))
+}
+
+# en masse computation of closest o2 to each o1, with o2 id and distance.
+id_dist <- function(o1, o2, c1='actual', c2='actual', o2_name='X')
+{
+    l1 <- nrow(o1)
+    l2 <- nrow(o2)
+    x1_col <- make_name(c1, 'x')
+    y1_col <- make_name(c1, 'y')
+    x2_col <- make_name(c2, 'x')
+    y2_col <- make_name(c2, 'y')
+    if ('data.table' %in% class(o1)) {
+        x1 <- o1[,x1_col,with=F]
+        y1 <- o1[,y1_col,with=F]
+    } else {
+        x1 <- o1[,x1_col]
+        y1 <- o1[,y1_col]
+    }
+    if ('data.table' %in% class(o2)) {
+        x2 <- o2[,x2_col,with=F]
+        y2 <- o2[,y2_col,with=F]
+    } else {
+        x2 <- o2[,x2_col]
+        y2 <- o2[,y2_col]
+    }
+    x1 <- matrix(x1, nrow=l1, ncol=l2)
+    x2 <- t(matrix(x2, nrow=l2, ncol=l1))
+    y1 <- matrix(y1, nrow=l1, ncol=l2)
+    y2 <- t(matrix(y2, nrow=l2, ncol=l1))
+    d <- sqrt((x2-x1)^2+(y2-y1)^2)
+    id <- apply(d, 1, which.min)
+    retval <- data.frame(id=apply(d, 1, which.min), d=apply(d, 1, min))
+    names(retval) <- paste(o2_name, c('id', 'km'), sep='_')
+    return (retval)
+}
+
+house_dist <- function(house, o2, c1='actual', c2='actual', o2_name='X')
+{
+    o1x <- house[,make_name(c1, 'x')]
+    o1y <- house[,make_name(c1, 'y')]
+    o2x <- o2[house[,make_name(o2_name, 'id')], make_name(c2, 'x')]
+    o2y <- o2[house[,make_name(o2_name, 'id')], make_name(c2, 'y')]
+    dx2 <- (o1x-o2x)^2
+    dy2 <- (o1y-o2y)^2
+    return (sqrt(dx2 + dy2))
+}
+
+
+# update houses with distances
+houses <- cbind(houses,
+                id_dist(houses, city_center, o2_name='center'),
+                id_dist(houses, metro_stations, o2_name='metro'),
+                id_dist(houses, train_stations, o2_name='train'),
+                id_dist(houses, bus_stations, o2_name='bus'))
+
+# Since any solution will only be known to rotation and reflection,
+# arbitrarily put m1 at theta=0.
+m1_theta <- (atan2(metro_stations[1,'actual_y'], metro_stations[1,'actual_x'])+2*pi)%%(2*pi)
+steps <- c(0,0,m1_theta,0)
+houses <- apply_standardize_steps(houses, steps)
+metro_stations <- apply_standardize_steps(metro_stations, steps)
+train_stations <- apply_standardize_steps(train_stations, steps)
+bus_stations <- apply_standardize_steps(bus_stations, steps)
+m2_sign <- sign(metro_stations[2,'actual_y'])
+if (m2_sign < 0) {
+    steps <- c(0,0,0,m2_sign)
+    houses <- apply_standardize_steps(houses, steps)
+    metro_stations <- apply_standardize_steps(metro_stations, steps)
+    train_stations <- apply_standardize_steps(train_stations, steps)
+    bus_stations <- apply_standardize_steps(bus_stations, steps)
+}
+```
+
+## Define solution vector.
+
+Our solution vector will be the (X,Y) pair for each house, followed
+by the (X,Y) pair for each metro station, followed by the (X,Y) pair for
+each train station. So every X will have an odd index 1... and every
+Y will have an even index 2...
+
+```{r}
+wrong_thing_penalty_factor <- 10
+
+sv_to_objs <- function(sv)
+{
+    offset <- 0
+    e_house <- data.frame(house_id=1:num_house, est_x=sv[offset+seq(1,2*num_house,2)], est_y=sv[offset+seq(2,2*num_house,2)])
+    e_house <- cbind(e_house, houses[,c('center_id', 'center_km', 'metro_id', 'metro_km', 'train_id', 'train_km')])
+    offset <- 2*num_house
+    e_metro <- data.frame(metro_id=1:num_metro, est_x=sv[offset+seq(1,2*num_metro,2)], est_y=sv[offset+seq(2,2*num_metro,2)])
+    offset <- 2*num_house+2*num_metro
+    e_train <- data.frame(train_id=1:num_train, est_x=sv[offset+seq(1,2*num_train,2)], est_y=sv[offset+seq(2,2*num_train,2)])
+    return (list(e_house=e_house, e_metro=e_metro, e_train=e_train))
+}
+
+wrong_thing_closest_penalty_score <- function(house, o2, c1='actual', c2='actual', o2_name='metro')
+{
+    thing_id <- make_name(o2_name, 'id')
+    thing_km <- make_name(o2_name, 'km')
+    thing_id_dist <- id_dist(house, o2, c1='est', c2='est', o2_name=o2_name)
+    thing_id_idx <- which(house[,thing_id] != thing_id_dist[,thing_id])
+    thing_id_penalty <- 0
+    if (length(thing_id_idx) != 0) {
+        thing_id_penalty <- sum(((house[,thing_km]-thing_id_dist[,thing_km])^2)[thing_id_idx])
+    }
+    return (thing_id_penalty)
+}
+
+sv_score <- function(sv)
+{
+    stopifnot(all(!is.nan(sv)))
+    stopifnot(all(!is.na(sv)))
+
+    objs <- sv_to_objs(sv)
+    center_d <- house_dist(objs$e_house, city_center, c1='est', o2_name='center')
+    center_d_error <- center_d - objs$e_house[,'center_km']
+    metro_d <- house_dist(objs$e_house, objs$e_metro, c1='est', c2='est', o2_name='metro')
+    metro_d_error <- metro_d - objs$e_house[,'metro_km']
+    train_d <- house_dist(objs$e_house, objs$e_train, c1='est', c2='est', o2_name='train')
+    train_d_error <- train_d - objs$e_house[,'train_km']
+    bus_d <- house_dist(objs$e_house, objs$e_bus, c1='est', c2='est', o2_name='bus')
+    bus_d_error <- train_d - objs$e_house[,'bus_km']
+
+    score <- sum(center_d_error^2)+sum(metro_d_error^2)+sum(train_d_error^2)+sum(bus_d_error^2)
+
+    # Now look for 'wrong thing is closer than actual thing.'
+    metro_id_penalty <- wrong_thing_closest_penalty_score(objs$e_house, objs$e_metro, c1='est', c2='est', o2_name='metro')
+
+    train_id_penalty <- wrong_thing_closest_penalty_score(objs$e_house, objs$e_train, c1='est', c2='est', o2_name='train')
+
+    bus_id_penalty <- wrong_thing_closest_penalty_score(objs$e_house, objs$e_bus, c1='est', c2='est', o2_name='bus')
+
+    score <- score + wrong_thing_penalty_factor*(metro_id_penalty + train_id_penalty + bus_id_penalty)
+    #print(sprintf('score is %f', score))
+    return(score/length(sv)*100)
+}
+
+sv_partials <- function(sv, pseudo_gain=1)
+{
+    objs <- sv_to_objs(sv)
+    p_center <- house_partials(objs$e_house, city_center, c1='est', o2_name='center', pseudo_gain=pseudo_gain)
+    p_metro  <- house_partials(objs$e_house, objs$e_metro, c1='est', c2='est', o2_name='metro', pseudo_gain=pseudo_gain)
+    p_train  <- house_partials(objs$e_house, objs$e_train, c1='est', c2='est', o2_name='train', pseudo_gain=pseudo_gain)
+    p_bus  <- house_partials(objs$e_house, objs$e_train, c1='est', c2='est', o2_name='bus', pseudo_gain=pseudo_gain)
+    return ((p_center+p_metro+p_train+p_bus)/length(sv)*100)
+
+}
+
+house_partials <- function(house, o2, c1='actual', c2='actual', o2_name='X', pseudo_gain=1)
+{
+    o2_id <- house[,make_name(o2_name, 'id')]
+    o1x <- house[,make_name(c1, 'x')]
+    o1y <- house[,make_name(c1, 'y')]
+    o2x <- o2[o2_id, make_name(c2, 'x')]
+    o2y <- o2[o2_id, make_name(c2, 'y')]
+    D <- house[,make_name(o2_name, 'km')]
+
+    hp <- house_partials_internals(o1x, o1y, o2x, o2y, o2_name, o2_id, D, ignore_overage=FALSE, pseudo_gain=pseudo_gain)
+    htp <- 0
+    if (o2_name %in% c('metro', 'train', 'bus')) {
+        thing_id_dist <- id_dist(house, o2, c1='est', c2='est', o2_name=o2_name)
+        t2_id <- thing_id_dist[,make_name(o2_name, 'id')]
+        t2x <- o2[t2_id, make_name(c2, 'x')]
+        t2y <- o2[t2_id, make_name(c2, 'y')]
+        tD <- apply(matrix(c(D, thing_id_dist[,make_name(o2_name, 'km')]), ncol=2), 1, max)
+        htp <- house_partials_internals(o1x, o1y, t2x, t2y, o2_name, t2_id, tD, ignore_overage=TRUE, pseudo_gain=pseudo_gain)
+    }
+    return (hp+wrong_thing_penalty_factor*htp)
+}
+
+# Compute the partial for o1x, o1y, o2x and o2y where correct distance is D.
+# To facilitate cases where D is a minium distance, you can specify
+# ignore_overage and any d > D won't count.
+house_partials_internals <- function(o1x, o1y, o2x, o2y, o2_name, o2_id, D, ignore_overage=FALSE, pseudo_gain=1)
+{
+    num_thing <- 1
+    if (o2_name == 'metro') {
+        num_thing <- num_metro
+    } else if (o2_name == 'train') {
+        num_thing <- num_train
+    } else if (o2_name == 'bus') {
+        num_thing <- num_bus
+    }
+    #print(sprintf('summary of o1x, o1y, o2x, o2y when processing %s', o2_name))
+    #print(xtabs(~o2_id))
+    #print(summary(o1x))
+    #print(summary(o1y))
+    #print(summary(o2x))
+    #print(summary(o2y))
+    stopifnot(length(o1x) == length(o1y))
+    stopifnot(length(o1x) == length(o2x))
+    stopifnot(length(o1x) == length(o2y))
+    stopifnot(length(o1x) == length(o2_id))
+    stopifnot(length(o1x) == length(D))
+
+    # per maxima:
+    # diff((sqrt((x2-x1)^2+(y2-y1)^2)-D)^2,x1)
+    #                                            2            2
+    #                 2 (x2 - x1) (sqrt((y2 - y1)  + (x2 - x1) ) - D)
+    #         - -----------------------------------------------
+    #                                        2            2
+    #                          sqrt((y2 - y1)  + (x2 - x1) )
+    # diff((sqrt((x2-x1)^2+(y2-y1)^2)-D)^2,x2);
+    #                                           2            2
+    #                2 (x2 - x1) (sqrt((y2 - y1)  + (x2 - x1) ) - D)
+    #          -----------------------------------------------
+    #                                       2            2
+    #                         sqrt((y2 - y1)  + (x2 - x1) )
+    d <- sqrt((o2x-o1x)^2 + (o2y-o1y)^2)
+
+    stopifnot(all(!is.nan(d)))
+    stopifnot(all(!is.na(d)))
+
+    # have one record per house so d/dx and d/dy for o1 x and y is straightforward.
+    # add a pseudo-gain to the denominator to avoid divide-by-zero blowup on
+    # very small distances.
+    do1x <- -1*(o2x-o1x)*(d-D)/(d+1/pseudo_gain)
+    do1y <- -1*(o2y-o1y)*(d-D)/(d+1/pseudo_gain)
+
+    # If we're handling a minimum constraint, ignore distances over the
+    # specified minimum.
+    if (ignore_overage) {
+        idx <- (d>D)
+        if (any(idx) > 0) {
+            do1x[idx] <- 0
+            do1y[idx] <- 0
+        }
+    }
+
+    stopifnot(all(!is.nan(do1x)))
+    stopifnot(all(!is.na(do1x)))
+    stopifnot(all(!is.nan(do1y)))
+    stopifnot(all(!is.na(do1y)))
+
+    # d/x2 is -1*d/dx1, so invert sign to get d/dx2.
+    # Each x and y for o2 is used several times, so have to sum all contributions.
+    do2x <- sapply(1:num_thing, function(i) { sum(-1*do1x[o2_id == i]) })
+    do2y <- sapply(1:num_thing, function(i) { sum(-1*do1y[o2_id == i]) })
+    stopifnot(length(do2x) == length(1:num_thing))
+    stopifnot(length(do2y) == length(1:num_thing))
+
+    # form new vector with house x,y interleaved, then metro x,y interleaved,
+    # then train x,y interleaved. Note this means we don't return jacobian
+    # elements for center... we know where that is.
+    mj_house <- matrix(c(do1x, do1y), nrow=num_house, ncol=2)
+    if (o2_name == 'metro') {
+        stopifnot(length(do2x) == num_metro)
+        mj_metro <- matrix(c(do2x, do2y), nrow=num_metro, ncol=2)
+    } else {
+        mj_metro <- matrix(0, nrow=num_metro, ncol=2)
+    }
+    if (o2_name == 'train') {
+        stopifnot(length(do2x) == num_train)
+        mj_train <- matrix(c(do2x, do2y), nrow=num_train, ncol=2)
+    } else {
+        mj_train <- matrix(0, nrow=num_train, ncol=2)
+    }
+    if (o2_name == 'bus') {
+        stopifnot(length(do2x) == num_bus)
+        mj_bus <- matrix(c(do2x, do2y), nrow=num_bus, ncol=2)
+    } else {
+        mj_bus <- matrix(0, nrow=num_bus, ncol=2)
+    }
+    #print(sprintf('summary of mj_house, mj_metro, mj_train when processing %s', o2_name))
+    #print(summary(mj_house))
+    #print(summary(mj_metro))
+    #print(summary(mj_train))
+    mj <- rbind(mj_house, mj_metro, mj_train, mj_bus)
+
+    stopifnot(all(!is.nan(mj)))
+    stopifnot(all(!is.na(mj)))
+
+    return (as.vector(t(mj)))
+}
+
+initial_estimates <- function(houses, nloop=1, seed=NULL)
+{
+    num_house <- nrow(houses)
+    house_r <- houses[,'center_km']
+
+    # be prepared to handle 'missing' stations
+    no_metro <- setdiff(1:num_metro, unique(houses$metro_id))
+    no_train <- setdiff(1:num_train, unique(houses$train_id))
+    no_bus <- setdiff(1:num_bus, unique(houses$bus_id))
+
+    metro_r <- sapply(1:num_metro, function(i) {
+        mean(houses[houses$metro_id==i,'center_km'])
+        })
+    metro_r[no_metro] <- mean(houses$center_km)
+    train_r <- sapply(1:num_train, function(i) {
+        mean(houses[houses$train_id==i,'center_km'])
+        })
+    train_r[no_train] <- mean(houses$center_km)
+
+    # arbitrarily assign metro thetas, with some randomization
+    if (!is.null(seed)) {
+        set.seed(seed)
+    }
+    metro_theta <- 2*pi/num_metro*sample(1:num_metro)
+    stopifnot(all(!is.nan(metro_theta)))
+
+    # loop a few times on trying to move metros to be by trains
+    # and vice-versa
+    for (j in 1:nloop) {
+        # try to (re)locate trains near metros
+        train_theta <- sapply(1:num_train, function(i) {
+            mean(metro_theta[houses$metro_id[houses$train_id==i]])
+        })
+
+        train_theta[no_train] <- pi*(1+runif(1))
+        #print(train_theta)
+        stopifnot(all(!is.nan(train_theta)))
+        # try to relocate metros to be closer to trains.
+        metro_theta <- sapply(1:num_metro, function(i) {
+            mean(train_theta[houses$train_id[houses$metro_id==i]])
+        })
+        metro_theta[no_metro] <- pi*(1+runif(1))
+        #print(metro_theta)
+        stopifnot(all(!is.nan(metro_theta)))
+        ## error metric
+        #train_theta_error <- sapply(1:num_train, function(i) {
+        #    sqrt(sum(train_theta[houses$train_id[houses$metro_id==i]]^2))
+        #})
+    }
+
+    house_theta <- sapply(1:num_house, function(i) {
+        mean(metro_theta[houses[i,'metro_id']], train_theta[houses[i,'train_id']])
+    })
+    house_theta <- house_theta + pi/30*rnorm(length(house_theta))
+    stopifnot(all(!is.nan(house_theta)))
+    stopifnot(all(!is.nan(metro_theta)))
+    stopifnot(all(!is.nan(train_theta)))
+
+    # assign metro, train and house X & Y
+    e_metro <- matrix(c(metro_r*cos(metro_theta), metro_r*sin(metro_theta)), ncol=2)
+    e_train <- matrix(c(train_r*cos(train_theta), train_r*sin(train_theta)), ncol=2)
+    e_house <- matrix(c(house_r*cos(house_theta), house_r*sin(house_theta)), ncol=2)
+
+    stopifnot(all(!is.nan(e_house)))
+    stopifnot(all(!is.nan(e_metro)))
+    stopifnot(all(!is.nan(e_train)))
+
+    iv <- as.vector(t(rbind(e_house, e_metro, e_train)))
+
+    stopifnot(all(!is.nan(iv)))
+    stopifnot(all(!is.na(iv)))
+
+    return(iv)
+}
+```
+
+## Adjacency
+
+See if we can use adjacency infomation to make better starting guesses.
+
+```{r adjacency}
+
+adjacency_matrix <- function(house, weighted=TRUE)
+{
+    warning('not handling bus data')
+    am <- xtabs(~factor(metro_id, levels=1:num_metro)+factor(train_id, levels=1:num_train), data=house)
+    am <- matrix(am, nrow=nrow(am), ncol=ncol(am))
+    if (!weighted) {
+        am[am>1] <- 1
+    }
+    return(am)
+}
+
+aj_edges <- function(am, house=NULL)
+{
+    warning('not handling bus data')
+    aj_m <- c()
+    aj_t <- c()
+    aj_w <- c()
+    for (i in 1:num_metro) {
+        for (j in 1:num_train) {
+            if (am[i,j] > 0) {
+                aj_m <- c(aj_m, i)
+                aj_t <- c(aj_t, j)
+                aj_w <- c(aj_w, am[i,j])
+            }
+        }
+    }
+    aj <- data.frame(
+        metro=sprintf('M%d', aj_m),
+        train=sprintf('T%d', aj_t),
+        weight=aj_w)
+
+    if (!is.null(house)) {
+        # add center distances if metro_r or train_r supplied
+        no_metro <- setdiff(1:num_metro, unique(house$metro_id))
+        no_train <- setdiff(1:num_train, unique(house$train_id))
+
+        metro_r <- sapply(1:num_metro, function(i) {
+            mean(house[house$metro_id==i,'center_km'])
+        })
+        metro_r[no_metro] <- 0
+        train_r <- sapply(1:num_train, function(i) {
+            mean(house[house$train_id==i,'center_km'])
+        })
+        train_r[no_train] <- 0
+
+        aj <- rbind(
+                aj,
+                data.frame(
+                    metro=sprintf('M%d', 1:num_metro),
+                    train='C',
+                    weight=1/metro_r))
+        aj <- rbind(
+                aj,
+                data.frame(
+                    metro='C',
+                    train=sprintf('T%d', 1:num_train),
+                    weight=1/train_r))
+    }
+    return(aj)
+}
+
+ig_from_house <- function(house)
+{
+    am <- adjacency_matrix(house)
+    aj <- aj_edges(am, house)
+    ig <- igraph::graph_from_data_frame(aj)
+    return(ig)
+}
+
+
+ig_layout <- function(ig, layout_fn=layout_with_gem, rescale=FALSE)
+{
+    retval <- cbind(igraph::as_data_frame(ig, what='vertices'),
+          layout_fn(ig))
+    names(retval) <- c('name', 'x', 'y')
+
+    # standardize by putting C at 0,0
+    center <- subset(retval, name == 'C')[1,]
+    retval$x <- retval$x - center$x
+    retval$y <- retval$y - center$y
+
+    # and put metro 1 due east.
+    retval$r <- with(retval, sqrt(x^2 + y^2))
+    retval$t <- with(retval, (atan2(y, x)+2*pi)%%(2*pi))
+    m1 <- subset(retval, name='M1')[1,]
+    retval$t <- retval$t - m1$t
+    retval$x <- with(retval, r*cos(t))
+    retval$y <- with(retval, r*sin(t))
+
+    # finally, flip so first metro after 1 with non-zero y
+    # is in top half plane.
+    for (m in sprintf('M%d', 2:num_metro)) {
+        sign_m <- sign(subset(retval, name==m)[1,'y'])
+        if (sign_m == 0) {
+            continue
+        }
+        if (sign_m < 0) {
+            retval$y <- -1 * retval$y
+            retval$t <- -1 * retval$t
+        }
+        break
+    }
+
+    # rescale so center weights are distances?
+    if (rescale) {
+        C_edges <- subset(igraph::as_data_frame(ig), from=='C' | to=='C')
+        cdist <- with(C_edges,
+                      data.frame(name=ifelse(from != 'C', from, to),
+                                 distance=1/weight))
+        cdist <- rbind(cdist, data.frame(name='C', distance=0.0))
+        retval <- merge(retval, cdist, by='name')
+        retval$r <- retval$distance
+        retval$x <- with(retval, r*cos(t))
+        retval$y <- with(retval, r*sin(t))
+    }
+    return(retval)
+}
+
+# bad plot, as plot.igraph will mess with layout.
+igp <- function(ig, layout)
+{
+    edges <- igraph::as_data_frame(ig, what='edges')
+    edges$color <- 'black'
+    edges$width <- log(edges$weight)+1
+    C_edges <- with(edges, which(from == 'C' | to == 'C'))
+    edges[C_edges,'color'] <- 'red'
+    edges[C_edges,'width'] <- 0.5
+    plot(ig, layout=as.matrix(layout[,c('x','y')]),
+         edge.color=edges$color, edge.width=edges$width)
+}
+
+
+# Use this.
+igl_plot <- function(layout, ig=NULL, r=NULL)
+{
+    xlim=NULL
+    ylim=NULL
+    if (!is.null(r)) {
+        xlim=c(-1*r,r)
+        ylim=c(-1*r,r)
+    }
+    layout$color <- 'white'
+    layout[grep('^M', layout$name), 'color'] <- '#ffffdd'
+    layout[grep('^T', layout$name), 'color'] <- '#ddffdd'
+
+    p <- ggplot2::ggplot(aes(x=x, y=y),data=layout)
+
+    if (!is.null(ig)) {
+        edges <- igraph::as_data_frame(ig)
+        edges <- merge(
+            edges,
+            with_colnames(layout[,c('name','x','y')], c('from', 'from_x', 'from_y'))
+        )
+        edges <- merge(
+            edges,
+            with_colnames(layout[,c('name','x','y')], c('to', 'to_x', 'to_y'))
+        )
+        edges$color <- 'blue'
+        edges$width <- log(edges$weight)+1
+        C_edges <- with(edges, which(from == 'C' | to == 'C'))
+        edges[C_edges,'color'] <- 'red'
+        edges[C_edges,'width'] <- 0.5
+        p <- p + ggplot2::geom_segment(aes(
+            x=from_x,
+            y=from_y,
+            xend=to_x,
+            yend=to_y),
+            color=edges$color,
+            size=edges$width,
+            data=edges)
+    }
+
+
+    p <- p+ggplot2::geom_label(aes(label=name), fill=layout$color)
+
+    p
+}
+
+
+# turn a metro/train solution vector into metro and train objects.
+# depends on train_r and metro_r vectors with the average distance
+# from city center for each train / metro.
+mt_sv_to_obj <- function(sv)
+{
+    offset <- 0
+    e_metro <- data.frame(metro_id=1:num_metro, est_x=sv[offset+seq(1,2*num_metro,2)], est_y=sv[offset+seq(2,2*num_metro,2)])
+    e_metro[,'r'] <- metro_r
+    offset <- 2*num_metro
+    e_train <- data.frame(train_id=1:num_train, est_x=sv[offset+seq(1,2*num_train,2)], est_y=sv[offset+seq(2,2*num_train,2)])
+    e_train['r'] <- train_r
+    return (list(e_metro=e_metro, e_train=e_train))
+}
+
+
+# use adjacency matrix to calculate score function
+mt_score <- function(sv)
+{
+    obj <- mt_sv_to_obj(sv)
+    metro_veroni <- with(obj$e_metro,
+                         deldir::deldir(est_x, est_y))
+    train_veroni <- with(obj$e_train,
+                         deldir::deldir(est_x, est_y))
+
+    return(metro_veroni)
+}
+```
+
+
+Now use it
+```{r adjacency_use}
+
+
+am <- adjacency_matrix(houses)
+print(am)
+ig <- ig_from_house(houses)
+
+# look at a few layouts
+set.seed(0)
+l1 <- ig_layout(ig, igraph::layout_nicely, rescale=FALSE)
+igl_plot(l1, ig)
+
+set.seed(0)
+l2 <- ig_layout(ig, igraph::layout_nicely, rescale=TRUE)
+igl_plot(l2, ig)
+
+set.seed(0)
+l3 <- ig_layout(ig, igraph::layout_with_gem, rescale=FALSE)
+igl_plot(l3, ig)
+
+set.seed(0)
+l4 <- ig_layout(ig, igraph::layout_with_gem, rescale=TRUE)
+igl_plot(l4, ig)
+```
+
+
+## Make an initial vector
+
+```{r make_initial_vector}
+
+iv <- initial_estimates(houses)
+print(sprintf("iv has %d elements", length(iv)))
+
+# see if basic gradient descent works before trying a 'real' solver
+for (i in 1:10) {
+    print(sv_score(iv))
+    iv_partials <- sv_partials(iv)
+    iv <- iv-iv_partials/10
+}
+```
+## Real solver
+
+Now let's try with a real solver.
+
+```{r real_solver}
+iv <- initial_estimates(houses, seed=0)
+sv <- stats::optim(iv, sv_score, sv_partials, method='BFGS',
+                   control=list(maxit=500))
+print(sprintf("have solution with value %f", sv$value))
+```
+
+Of course, this is a local optimum, not necessarily a global one.
+Try with a few other seeds to see if that makes a difference.
+
+```{r real_solver_other_seeds}
+best_score <- sv$value
+best_sv <- sv
+trial_seeds <- c(40,-498,82002,-234882,3409405,-40598405,98500213)
+for (s in trial_seeds) {
+    iv <- initial_estimates(houses, seed=s)
+    sv <- stats::optim(iv, sv_score, sv_partials, method='BFGS',
+                   control=list(maxit=500))
+    print(sprintf('seed %d produces score %f', s, sv$value))
+    if (sv$value < best_score) {
+        best_score <- sv$value
+        best_sv <- sv
+    }
+}
+print(sprintf('best score is %f', best_score))
+# best_sv$par is the best solution vector.
+```
+
+
+## Perform final eval.
+
+In theory, now we know the location of each house, metro station and
+train station. At least up to rotation around the city center.
+
+So figure out what the best rotation is.
+
+```{r find_solution_rotation}
+to_rt <- function(data, col_prefix='actual')
+{
+    matrix(c(
+        sqrt(data[,make_name(col_prefix, 'x')]^2+data[,make_name(col_prefix, 'y')]^2),
+        (atan2(data[,make_name(col_prefix, 'y')], data[,make_name(col_prefix, 'x')])+2*pi)%%(2*pi)),
+        ncol=2)
+}
+
+add_rt <- function(data, col_prefix='actual')
+{
+    m <- to_rt(data, col_prefix)
+    data[,make_name(col_prefix, 'r')] <- m[,1]
+    data[,make_name(col_prefix, 't')] <- m[,2]
+    return (data)
+}
+
+
+to_xy <- function(data, theta=0)
+{
+    s <- sign(theta)
+    if (s == 0) {
+        s <- 1
+    }
+    print(sprintf('s is %d', s))
+    matrix(c(data[,1]*cos(s*data[,2]+theta),
+             data[,1]*sin(s*data[,2]+theta)),
+           ncol=2)
+}
+
+a_house_rt <- to_rt(houses)
+a_metro_rt <- to_rt(metro_stations)
+a_train_rt <- to_rt(train_stations)
+actual <- rbind(a_house_rt, a_metro_rt, a_train_rt)[,2]
+obj <- sv_to_objs(best_sv$par)
+e_house_rt <- to_rt(obj$e_house, col_prefix='est')
+e_metro_rt <- to_rt(obj$e_metro, col_prefix='est')
+e_train_rt <- to_rt(obj$e_train, col_prefix='est')
+estimated <- rbind(e_house_rt, e_metro_rt, e_train_rt)[,2]
+
+theta_score_fn <- function(theta)
+{
+    sapply(theta, function(t) {
+        s <- sign(t)
+        if (s == 0) {
+            s <- 1
+        }
+        sum(((t+s*estimated-actual)%%(2*pi)-pi)^2)
+        })
+}
+
+candidate_thetas <- ((-360*4):(360*4))/4/180*pi
+best_guess <- candidate_thetas[which.min(theta_score_fn(candidate_thetas))]
+theta <- optim(best_guess, theta_score_fn, NULL, method='BFGS',
+               control=list(trace=1, fnscale=1))
+
+
+```
+
+## Plots
+
+```{r plots}
+obj <- sv_to_objs(best_sv$par)
+#all_train <- data.frame(train_id=c(1:num_train, 1:num_train), est_act=c(rep('actual', num_train), rep('estimated', num_train)), ea=c(rep('A', num_train), rep('E', num_train)))
+#all_train$x <- c(train_stations$actual_x, obj$e_train$est_x)
+#all_train$y <- c(train_stations$actual_y, obj$e_train$est_y)
+#all_train$label <- sprintf('%s%d', all_train$ea, all_train$train_id)
+all_train <- cbind(train_stations, as.data.frame(to_xy(to_rt(obj$e_train, 'est')), theta$par))
+names(all_train)[(length(all_train)-1):length(all_train)] <- c('est_x', 'est_y')
+ggplot(all_train)+geom_segment(aes(x=actual_x, y=actual_y, xend=est_x, yend=est_y))+geom_point(aes(x=actual_x, y=actual_y))
+
+```
+
+## Ideas
+
+* Shrink number of houses, metros, trains back down so this
+    runs faster while working on it
+
+* Figure out why all estimated x values are negative.
+    Score error? gradient error?
+    - looks like score function, since even SANN method
+        mostly returns train in left half plane.
+
+* Make graphs of iv and perhaps at a few points during
+    optimization.
+
+* Try testing score fn by making an iv that matches the
+    actual solution, and then altering it slightly and
+    seeing what happens to the score and gradient.
+
+```{r generalized}
+
+# solver in terms of two objects: vertices and edge constraints.
+# use data table for fast lookup without hassle of directly hashing.
+library(data.table)
+
+make_settings <- function(obj, goals, known_values, name_col='name', col_prefix='est', work_from='rt')
+{
+    nobj <- nrow(obj)
+    retval <- list()
+    retval$obj <- obj
+    retval$nobj <- nobj
+    retval$goals <- data.table(goals)
+    retval$col_prefix <- col_prefix
+    retval$name_col <- name_col
+    retval$r_col <- make_name(col_prefix, 'r')
+    retval$t_col <- make_name(col_prefix, 't')
+    retval$x_col <- make_name(col_prefix, 'x')
+    retval$y_col <- make_name(col_prefix, 'y')
+    retval$name <- data.table(obj[,name_col])
+    retval$work_from <- work_from
+    retval$known_values <- known_values
+    retval$known_values$val_name <- with(retval$known_values, paste(name, field, sep=':'))
+    if (work_from == 'rt') {
+        fields <- c(rep('r', nobj),rep('t', nobj))
+    } else if (work_from == 'xy') {
+        fields <- c(rep('x', nobj),rep('y', nobj))
+    } else {
+        stop(sprintf('do not know how to work from %s', work_from))
+    }
+    retval$value_positions <- with(
+        retval, data.frame(
+            pos=1:(2*nobj),
+            field=fields,
+            val_name=paste(
+                c(as.character(name),as.character(name)),
+                fields,
+                sep=':')
+        )
+    )
+    retval$known_values <- merge(retval$known_values, retval$value_positions, by='val_name')
+    retval$known_values[order(retval$known_values$pos),]
+    retval$unknown_mask <- which(!(retval$value_positions$val_name %in% retval$known_values$val_name))
+
+    return(retval)
+}
+
+
+rt_lower_bound_from_settings <- function(settings)
+{
+    lower <- rep(0, length(settings$unknown_mask))
+    return (lower)
+}
+
+rt_upper_bound_from_settings <- function(settings, max_r=1)
+{
+    upper <- rep(2*pi, length(settings$unknown_mask))
+    r_idx <- intersect(which(settings$value_position$field == 'r'), settings$unknown_mask)
+    upper[r_idx] <- max_r
+    return (upper)
+}
+
+obj_to_sv_factory <- function(settings)
+{
+    obj_to_sv <- function(obj)
+    {
+        if (settings$work_from == 'rt') {
+            all_values <- c(obj[,settings$r_col], (obj[,settings$t_col]+2*pi)%%(2*pi))
+        } else if (settings$work_from == 'xy') {
+            all_values <- c(obj[,settings$x_col], obj[,settings$y_col])
+        } else {
+            stop(sprintf('do not know how to work from %s', work_from))
+        }
+        return(as.vector(all_values[settings$unknown_mask]))
+    }
+    return(obj_to_sv)
+}
+
+sv_to_obj_factory <- function(settings)
+{
+    sv_to_obj <- function(sv)
+    {
+        all_values <- rep(NA, 2*settings$nobj)
+        all_values[settings$known_values$pos] <- settings$known_values$value
+        all_values[settings$unknown_mask] <- sv
+
+        obj <- settings$obj
+        nobj <- settings$nobj
+        if (settings$work_from == 'rt') {
+            obj[,settings$r_col] <- all_values[1:nobj]
+            obj[,settings$t_col] <- all_values[(nobj+1):(2*nobj)]
+            obj[,settings$x_col] <- obj[,settings$r_col]*cos(obj[,settings$t_col])
+            obj[,settings$y_col] <- obj[,settings$r_col]*sin(obj[,settings$t_col])
+        } else {
+            obj[,settings$x_col] <- all_values[1:nobj]
+            obj[,settings$y_col] <- all_values[(nobj+1):(2*nobj)]
+            # probably do not need r,t in this case
+        }
+        return(obj)
+    }
+    return(sv_to_obj)
+}
+
+mt_score_fn_factory <- function(
+    settings,
+    regularization_weight_dist=1,
+    regularization_weight_angle=1)
+{
+    sv_to_obj <- sv_to_obj_factory(settings)
+    name_col <- settings$name_col
+    r_col <- settings$r_col
+    t_col <- settings$t_col
+    x_col <- settings$x_col
+    y_col <- settings$y_col
+
+    mt_score_fn <- function(sv, report_goals=FALSE)
+    {
+        obj <- sv_to_obj(sv)
+
+        if (length(setdiff(unique(settings$goals$field_op), c('r=','d=')))>0) {
+            stop("cannot handle a goal field other than r= or d=")
+        }
+        r_goals <- settings$goals[field_op=='r=',]
+        r_goals <- merge(
+            r_goals,
+            with_colnames(obj[,c(name_col, r_col)],c(name_col,'sv_value')),
+            by=name_col)
+        r_score <- sum((r_goals[,'sv_value']-r_goals[,'value'])^2)
+        stopifnot(r_score >= 0)
+
+        d_goals <- settings$goals[field_op=='d=',]
+        tmp <- merge(
+            d_goals,
+            with_colnames(obj[,c(name_col,x_col,y_col)],
+                       c('from_name','from_x','from_y')),
+            by.x='name', by.y='from_name')
+        tmp <- merge(
+            tmp,
+            with_colnames(obj[,c(name_col,x_col,y_col)],
+                             c('to_name','to_x','to_y')),
+            by.x='other_name', by.y='to_name')
+        stopifnot(nrow(tmp)==nrow(d_goals))
+        tmp[,'sv_value'] <- simple_dist(tmp, tmp, c1='from', c2='to')
+        d_goals <- merge(
+            d_goals,
+            tmp[,c('name','other_name','sv_value')],
+            by=c('name','other_name'))
+        d_score <- sum((d_goals[,'sv_value']-d_goals[,'value'])^2)
+        stopifnot(d_score >= 0)
+
+        rp <- regularization_weight_dist*sum(obj[,r_col])
+        rp <- rp + regularization_weight_angle*sum(abs(obj[,t_col])>2*pi)
+
+        retval <- (r_score+d_score+rp)/length(sv)
+        if (report_goals) {
+            retval <- list(score=retval, goals=rbind(r_goals, d_goals))
+        }
+        gc()
+        return (retval)
+    }
+    return(mt_score_fn)
+}
+
+
+plot_obj <- function(obj)
+{
+    p <- ggplot(obj)
+    p <- p + geom_segment(aes(x=actual_x, y=actual_y, xend=est_x, yend=est_y))
+    p <- p + geom_label(aes(x=actual_x, y=actual_y, label=name))
+    return (p)
+}
+
+```
+
+
+```{r generalized_applyed_to_mt}
+
+# Define objects for initial value problem, just looking
+# at metro and train stations.
+obj <- rbind(with(metro_stations,
+            data.frame(
+                name=sprintf('M%d', metro_id),
+                actual_x=actual_x,
+                actual_y=actual_y,
+                est_x=NA,
+                est_y=NA)),
+            with(train_stations,
+            data.frame(
+                name=sprintf('T%d', train_id),
+                actual_x=actual_x,
+                actual_y=actual_y,
+                est_x=NA,
+                est_y=NA)),
+            with(bus_stations,
+            data.frame(
+                name=sprintf('B%d', bus_id),
+                actual_x=actual_x,
+                actual_y=actual_y,
+                est_x=20*runif(num_bus),
+                est_y=2*pi*runif(num_bus)))
+)
+obj <- cbind(obj, find_rt(obj, col_prefix='est'))
+# Define M1 theta == 0 just to make unique (to reflection)
+# and drop a param we'd otherwise solve for.
+known_values <- data.frame(
+    name='M1', field='t', value=0.0
+)
+
+
+# also know, more-or-less, the distance from each metro to
+# the city center. By triangle inequality, the sum of
+# the distance from a house to the city center and the house
+# to the metro station has to be as large or larger than the
+# distance from the city center to the metro station. Smallest
+# one of those is the best guess at the actual distance.
+metro_goals <- houses %>%
+    group_by(metro_id) %>%
+        summarize(d=min(metro_km+center_km), weight=n())
+goals <- with(
+    metro_goals, data.frame(
+        name=sprintf('M%d', metro_id),
+        field_op='r=',
+        value=d,
+        other_name=NA,
+        weight=weight))
+# same applies to trains
+train_goals <- houses %>%
+    group_by(train_id) %>%
+        summarize(d=min(train_km+center_km), weight=n())
+goals <- rbind(
+    goals,
+    with(train_goals, data.frame(
+        name=sprintf('T%d', train_id),
+        field_op='r=',
+        value=d,
+        other_name=NA,
+        weight=weight)))
+# and busses
+# same applies to trains
+bus_goals <- houses %>%
+    group_by(bus_id) %>%
+        summarize(d=min(bus_km+center_km), weight=n())
+goals <- rbind(
+    goals,
+    with(bus_goals, data.frame(
+        name=sprintf('B%d', bus_id),
+        field_op='r=',
+        value=d,
+        other_name=NA,
+        weight=weight)))
+
+
+# Lastly, can do a traingle inequality between metros and
+# train stations, too
+metro_train_goals <- houses %>%
+    group_by(metro_id, train_id) %>%
+        summarize(d=min(metro_km+train_km), weight=n())
+goals <- rbind(
+    goals,
+    with(metro_train_goals, data.frame(
+        name=sprintf('M%d', metro_id),
+        field_op='d=',
+        value=d,
+        other_name=sprintf('T%d', train_id),
+        weight=weight)))
+# and metros and busses
+metro_bus_goals <- houses %>%
+    group_by(metro_id, bus_id) %>%
+        summarize(d=min(metro_km+bus_km), weight=n())
+goals <- rbind(
+    goals,
+    with(metro_bus_goals, data.frame(
+        name=sprintf('M%d', metro_id),
+        field_op='d=',
+        value=d,
+        other_name=sprintf('B%d', bus_id),
+        weight=weight)))
+# and trains and busses
+train_bus_goals <- houses %>%
+    group_by(train_id, bus_id) %>%
+        summarize(d=min(train_km+bus_km), weight=n())
+goals <- rbind(
+    goals,
+    with(train_bus_goals, data.frame(
+        name=sprintf('T%d', train_id),
+        field_op='d=',
+        value=d,
+        other_name=sprintf('B%d', bus_id),
+        weight=weight)))
+
+#detach_package(deplyr)
+
+settings <- make_settings(
+    obj, goals=goals, known_values=known_values,
+    col_prefix='est', work_from='rt')
+obj_to_sv <- obj_to_sv_factory(settings)
+sv_to_obj <- sv_to_obj_factory(settings)
+mt_score_fn <- mt_score_fn_factory(settings)
+
+# OK, try some igraph based stuff for initial values
+# based on the goals... using C as 'to' with the r=
+# goals
+g2 <- with_colnames(goals[,c('name','other_name','value')],
+                  c('from','to','distance'))
+g2$weight <- 1/g2$distance
+g2[is.na(g2$to),'to'] <- 'C'
+ig <- igraph::graph_from_data_frame(g2)
+
+
+set.seed(0)
+l1 <- replace_colnames(
+    data.frame(ig_layout(ig, rescale=TRUE)),
+    c('r','t'),
+    c('est_r','est_t'))
+l1_obj <- merge(sans_cols(obj, c('est_r', 'est_t')), l1, by='name', all=TRUE)
+iv <- obj_to_sv(l1_obj)
+print(tail(iv))
+print(mt_score_fn(iv))
+plot_obj(sv_to_obj(iv))
+
+timeit <-function(fn, ...)
+{
+  print(Sys.time())
+  retval <- fn(...)
+  print(Sys.time())
+  return(retval)
+}
+
+iv_from_truth <- function(obj, sigma)
+{
+    obj <- data.frame(obj)
+    obj$est_x <- obj$actual_x + sigma*rnorm(nrow(obj))
+    obj$est_y <- obj$actual_y + sigma*rnorm(nrow(obj))
+    obj <- add_rt(obj, 'est')
+    return (obj_to_sv(obj))
+}
+
+library(GenSA)
+lower <- rt_lower_bound_from_settings(settings)
+upper <- rt_upper_bound_from_settings(settings)
+gensa_control <- list(verbose=TRUE)
+sv_gensa <- timeit(GenSA::GenSA, iv, mt_score_fn, lower=lower, upper=upper, control=gensa_control)
+
+
+sv1 <- stats::optim(iv, mt_score_fn, NULL, method='L-BFGS-B',
+                   control=list(trace=1,maxit=300,fnscale=1,pgtol=0,factr=1e-8),
+                   lower=0)
+sv1_obj <- sv_to_obj(sv1$par)
+sv1_av_dist_error <- sum(simple_dist(sv1_obj, sv1_obj, c1='actual', c2='est'))/nrow(sv1_obj)
+plot_obj(sv1_obj)
+
+best_sv_score <- sv1$value
+best_sv <- sv1
+
+for (s in c(313,-793,334431,-442423)) {
+    set.seed(s)
+    l <- with_colnames(data.frame(ig_layout(ig, rescale=TRUE))[,c('name','r','t')],
+                        c('name', 'est_r','est_t'))
+    l_obj <- merge(sans_cols(obj, c('est_r', 'est_t')), l, by='name')
+    iv <- obj_to_sv(l_obj)
+    print(tail(iv))
+    sv <- stats::optim(iv, mt_score_fn, NULL, method='L-BFGS-B',
+                        control=list(trace=1, maxit=500),
+                        lower=0)
+    sv_obj <- sv_to_obj(sv$par)
+    sv_av_dist_error <- sum(simple_dist(sv_obj, sv_obj, c1='actual', c2='est'))/nrow(sv_obj)
+    print(c(sv_av_dist_error, sv$value))
+    plot_obj(sv_obj)
+    if (best_sv_score < sv$value) {
+        best_sv_score <- sv$value
+        best_sv <- sv
+    }
+}
+
+```

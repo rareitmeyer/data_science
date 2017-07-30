@@ -1,0 +1,489 @@
+---
+title: "AV Explained and Exploited for Better Prediction"
+author: "rareitmeyer"
+date: "2017-05-16"
+output: html_document
+---
+
+
+# Summary
+
+This script explains adversarial validation, shows important
+differences between the Kaggle-supplied test and training data,
+and gives you the test row IDs that can improve your prediction
+accuracy. Along the way, it illustrates using XGBoost for 
+classification, how to spot the most important features in a XGBoost
+model, and permutation testing.
+
+
+# Validation Background
+
+When building a model for a Kaggle contest, it's easy to check
+accuracy by modeling against the entire 'train' dataset provided,
+then predicting on all the provided 'test' and using the leaderboard
+to see which model is best.
+
+But that only works for less than five good ideas per day,
+and isn't easy to add into a programmatic optimization routine.
+
+The preferred approach is to break the supplied training data into
+two or three subsets. Names vary, but basically:
+
+* train, used to train a model, ~60% of the overall train data
+
+* test, used to pick hyperparameters, ~20% of the overall train data
+
+* validation, used to chose between models, ~20% of the overall train data
+
+By picking models based on the validation set, we can do all the
+model-picking work locally without any five-per-day limit. (Beware we
+will eventually start overfitting the validation set, but it happens
+indirectly.)
+
+
+## But what happens if my validation set isn't like the Kaggle 'test' set?
+
+Using a local validation set is great... unless it isn't. If the data
+set we are using to validate against "is not like" the data set Kaggle
+is using to score our entry, model-picking will go awry.
+
+
+## Adversarial validation
+
+Enter "Adversarial Validation." Obligatory links: 
+
+* [http://fastml.com/adversarial-validation-part-one/]
+* [http://fastml.com/adversarial-validation-part-two/]
+
+Adversarial validation is a way to check to see if the validation set
+(or more broadly, the overall training data) is like the submission test
+data.
+
+This is _good_ in that it lets us know if using a randomly-picked
+test or validation data set for model picking will be helpful or 
+misleading.
+
+But it's _great_ because it provides a way to make new
+test / validation sets that should be like the submission test data,
+enabling us to use our test / validation results with confidence.
+
+
+## Setup
+
+Get started by loading libraries, defining some useful functions, 
+loading the data and fixing data types. 
+
+(Have echo=FALSE to suppress this as it's fairly boring, but 
+look at the code if interested.)
+
+
+```{r setup, echo=FALSE, include=FALSE}
+library(knitr)
+library(xgboost)
+library(caret)
+library(ggplot2)
+library(vcd)
+
+#knitr::opts_chunk$set(echo = FALSE)
+
+input_filename <- function(name, dir=input_dir) {
+    file.path(input_dir, name)
+}
+
+sans_cols <- function(data, cols)
+{
+    return (data[,setdiff(names(data),cols)])
+}
+
+to_X <- function(data, label=NULL, skipcols=c()) {
+    stopifnot(sum(is.na(data))==0)
+    mm <- model.matrix(~., data=sans_cols(data, skipcols))
+    if (is.null(label)) {
+      return (list(X=xgboost::xgb.DMatrix(mm), names=dimnames(mm)[[2]]))
+    } else {
+      return (list(X=xgboost::xgb.DMatrix(mm, label=label), names=dimnames(mm)[[2]]))
+    }
+}
+
+fix_col_types <- function(data, newtype, cols, ...)
+{
+    for (col in cols) {
+        if (!(col %in% names(data))) {
+            stop(sprintf("column %s is not present in the data", col))
+        }
+        if (newtype == 'character') {
+            data[,col] <- as.character(data[,col])
+        } else if (newtype == 'Date') {
+            data[,col] <- as.Date(as.character(data[,col]), ...)
+        } else if (newtype == 'factor') {
+            data[,col] <- factor(data[,col])
+        } else if (newtype == 'integer') {
+            data[,col] <- as.integer(as.character(data[,col]))
+        } else if (newtype == 'numeric') {
+            data[,col] <- as.numeric(as.character(data[,col]))
+        } else if (newtype == 'boolean') {
+            data[,col] <- ifelse(tolower(as.character(data[,col])) %in% c('1', 'true', 't', 'yes', 'y'), 1, 0)
+        } else {
+            stop(sprintf("unrecognized type %s", newtype))
+        }
+    }
+    return (data)
+}
+
+# a very simple NA-handling routine
+simple_imputer <- function(data)
+{
+    for (col in names(data)) {
+        if (any(is.na(data[,col]))) {
+            idx <- which(is.na(data[,col]))
+            if (is.character(data[,col])) {
+                data[idx,col] <- '<unknown>'
+            } else if (is.factor(data[,col])) {
+                tmp <- as.character(data[,col])
+                tmp[idx] <- '<unknown>'
+                data[,col] <- factor(tmp)
+            } else if (is.numeric(data[,col])) {
+                data[,sprintf('%s_isna', col)] <- is.na(data[,col])
+                data[idx,col] <- median(data[,col], na.rm=TRUE)
+            } else {
+                stop(sprintf("cannot impute column %s: unrecognized type %s", col, class(data[,col])))
+            }
+        }
+    }
+    return (data)
+}
+    
+input_dir = '../input'
+response_col <- 'price_doc'
+
+# Load all of the test and train data into one data frame so it's
+# easier to fix types.
+overall_data <- rbind(read.csv(input_filename('train.csv')),
+                      cbind(read.csv(input_filename('test.csv')), price_doc=NA))
+
+# Start fixing types.
+overall_data <- fix_col_types(overall_data, 'Date',
+                              'timestamp')
+overall_data <- fix_col_types(overall_data, 'numeric',
+                              c('full_sq', 'life_sq', 'kitch_sq',
+                                'area_m',
+                                'raion_popul'))
+overall_data <- fix_col_types(overall_data, 'integer',
+                              c('floor', 'max_floor',
+                                'build_year',
+                                'state',
+                                'num_room'))
+overall_data <- fix_col_types(overall_data, 'factor',
+                              c('material',
+                                'state',
+                                'product_type',
+                                'sub_area',
+                                'ID_metro',
+                                'ID_railroad_station_walk',
+                                'ID_railroad_station_avto',
+                                'ID_big_road1',
+                                'ID_big_road2',
+                                'ID_railroad_terminal',
+                                'ID_bus_terminal'))
+overall_data <- fix_col_types(overall_data, 'boolean',
+                              c('culture_objects_top_25',
+                                'thermal_power_plant_raion',
+                                'incineration_raion',
+                                'oil_chemistry_raion',
+                                'radiation_raion',
+                                'railroad_terminal_raion',
+                                'big_market_raion',
+                                'nuclear_reactor_raion',
+                                'detention_facility_raion',
+                                'water_1line',
+                                'big_road1_1line',
+                                'railroad_1line'))
+
+# remove NAs with a simple imputation scheme.
+overall_data <- cbind(simple_imputer(sans_cols(overall_data, response_col)),
+                      price_doc=overall_data[,response_col])
+
+# Also load the macro data. Won't use it much, so don't
+# spend a lot of time on it.
+macro <- read.csv(input_filename('macro.csv'))
+macro <- fix_col_types(macro, 'Date',
+                              'timestamp')
+```
+
+
+## In adversarial validation, the response is test/train, not price.
+
+The big idea is that we can compare whether or not the supplied 
+training and submission test data are "the same" by fitting a 
+powerful model try to predict whether a given point came from 
+train or test.
+
+If the model can't do better than a random guess, then the two 
+data sets are essentially identical. (Or our model was poor.)
+
+So for adversarial validation, the goal isn't to predict the response...
+it's to predict whether or not the price is known. To that end, replace
+the response with a 0/1 train/test indicator.
+
+```{r classification_response}
+overall_data[,response_col] <- as.numeric(is.na(overall_data[,response_col]))
+```
+
+
+## No timestamp or macroeconomic features
+
+Thinking ahead to avoid doing useless work, and keep this 
+presentation shorter, we're not going to use the timestamp 
+or macroecomic features.
+
+If we keep the timestamp and macroeconomic indicators, we'd 
+have complete separation, because all of the train data is 
+2015-06-30 or earlier and all test data is 2015-07-01 or later. 
+The timestamp is a direct giveaway.
+
+Other macroeconomic columns like cpi or deposits value or 
+fixed basket are fairly unique to the before / after 2015-06-30 
+cutoff and are also giveaways.
+
+```{r plot_economics}
+ggplot2::qplot(timestamp, price_doc, data=overall_data)
+
+ggplot2::qplot(cpi, price_doc, data=merge(overall_data, macro, by='timestamp'))
+
+ggplot2::qplot(deposits_value, price_doc, data=merge(overall_data, macro, by='timestamp'))
+
+ggplot2::qplot(fixed_basket, price_doc, data=merge(overall_data, macro, by='timestamp'))
+```
+
+
+## Predictor columns
+
+The predictor columns are the ones we'll model on. As above, omit 
+the response column, the timestamp, and the ID since that is another
+giveaway. If we'd merged in macroeconomic columns, we'd omit those too.
+
+But take all the other columns.
+
+```{r predictor_cols}
+predictor_cols <- setdiff(names(overall_data), c(response_col,'timestamp','id'))
+```
+
+```{r predictor_cols_for_preprocessed_data, echo=FALSE}
+# If you have preprocessed a bunch of data together with macroeconomics...
+# load and get rid of date-centric macroeconomic columns
+if (FALSE) {
+    load(file='preprocessed.Rdata')
+    overall_data <- do.call(rbind, preprocessed)
+    overall_data[,response_col] <- as.numeric(is.na(data[,response_col]))
+    house_cols <- names(read.csv(input_filename('test.csv')))
+    house_cols <- intersect(names(data), c(house_cols, paste(house_cols, '_isna', sep='')))
+    # only look at predictor cols in the house-specific data
+    predictor_cols <- intersect(all_predictor_cols, house_cols)
+    # and drop timestamp and ID
+    predictor_cols <- setdiff(predictor_cols, c(response_col, 'timestamp', 'id'))
+}
+```
+
+
+Now build random splits for train / test / validation sets, per 
+typical practice typically outside of adversarial validation. We'll
+be able to see how well those are predicted by the upcoming model
+as a check.
+
+Make XGBoost matricies, too. (Here "to X" is utility function skipped
+over above.)
+
+```{r make_model_data}
+# partition repeatably by setting a seed to contest end-date as an integer.
+set.seed(20170529)
+
+train_idx <- caret::createDataPartition(overall_data[1:nrow(overall_data),response_col], p=0.6, list=FALSE)
+non_train <- overall_data[setdiff(1:nrow(overall_data), train_idx),]
+train <- overall_data[train_idx,]
+validation_idx <- caret::createDataPartition(non_train[,response_col], p=0.5, list=FALSE)
+validation <- non_train[validation_idx,]
+test <- non_train[-c(validation_idx),]
+
+X_train <- to_X(train[,predictor_cols], label=train[,response_col])
+X_test <- to_X(test[,predictor_cols], label=test[,response_col])
+X_validation <- to_X(validation[,predictor_cols], label=validation[,response_col])
+```
+
+
+Make a model with XGBoost. Note that this is a classification 
+problem, not a regression problem, so the objective is 
+binary:logistic and the eval metric is logloss. (Don't accidentally 
+copy-paste linear regression code when doing adversarial validation!)
+
+```{r make_model}
+param <- list(objective="binary:logistic",
+              eval_metric = "logloss",
+              eta = .02,
+              gamma = 1,
+              max_depth = 4,
+              min_child_weight = 1,
+              subsample = .7,
+              colsample_bytree = .5
+)
+rounds = 300
+xgb_model <- xgb.train(data = X_train$X,
+                       params = param,
+                       watchlist = list(train = X_train$X),
+                       nrounds = rounds,
+                       verbose = 1,
+                       print.every.n = 25
+)
+```
+
+# Predictions
+
+So, check the predictions for our in-sample (train) data set
+and test / validation data sets. Are the test and validation data sets
+roughly in line with random guessing, which would mean the Kaggle 
+submission test data is "the same as" the overall training data?
+
+Compare f1 scores from the predictor and random guessing with same 
+proportion of train/test points. The latter is easily obtained by
+permuting. 
+
+
+```{r model_evaluation}
+library(ModelMetrics, quiet=TRUE)
+score_fn <- function(actual, predicted)
+{
+  return (ModelMetrics::f1Score(actual, predicted))
+}
+train_preds <- predict(xgb_model, X_train$X)
+print(sprintf('train score: %f', score_fn(train[,response_col],train_preds)))
+train_random_guess <- sample(train[,response_col])
+print(sprintf('train random guess score: %f', score_fn(train[,response_col],train_random_guess)))
+
+test_preds <- predict(xgb_model, X_test$X)
+print(sprintf('test score: %f', score_fn(test[,response_col],test_preds)))
+test_random_guess <- sample(test[,response_col])
+print(sprintf('test random guess score: %f', score_fn(test[,response_col],test_random_guess)))
+
+valid_preds <- predict(xgb_model, X_validation$X)
+print(sprintf('validation score: %f', score_fn(validation[,response_col],valid_preds)))
+valid_random_guess <- sample(validation[,response_col])
+print(sprintf('test random guess score: %f', score_fn(validation[,response_col],valid_random_guess)))
+```
+
+
+## Feature Importances
+
+OK, the model did find a discrepancy between the test and train sets,
+even after excluding obvious columns like id, timestamp, and any
+macroeconomic columns that would proxy for timestamp.
+
+We can see what it found by looking at the top feature importances. 
+
+In XGBoost, the 'Gain' is the most important number, bigger meaning 
+more important.
+
+```{r feature_importances}
+# importances are ordered by Gain, biggest gain (most important) first
+importances <- xgb.importance(feature_names=X_train$names, model=xgb_model)
+head(importances,10)
+xgb.plot.importance(importances[1:10,])
+```
+
+Looks like kitchen square meters and NA for max floors are pretty different
+between the overall train data and the submission test data. 
+
+The submission test data (price_doc==1 here) appears to have 
+proportionally fewer ~2m^2 kitchens, for example. 
+
+```{r plot_of_kitch_sq_vs_istest}
+ggplot2::ggplot(aes(x=kitch_sq, y=price_doc), data=overall_data)+geom_jitter(width=0.4, alpha=0.1)+scale_x_log10()
+```
+
+And if a record has max_floor as NA, it's always a train record 
+and not a submission test record.
+
+```{r plot_of_maxfloor_isna_vs_istest}
+vcd::mosaic(xtabs(~max_floor_isna + price_doc, data=overall_data))
+```
+
+It's certainly possible to records with the number of rooms missing,
+or the build year, but it's not really needed.
+
+
+## Make new train / test / validation sets the easy way
+
+While we could make a series of graphs like the above and then
+try to use them to pick data that is suitable for using as a
+test / validation set, there is a better way.
+
+We'll use the model we built to predict how "test"-like each
+record of the overall training data is. Sort on the prediction
+column, and the top N rows are our top-N test like records!
+
+So instead of partioning the provided training data randomly
+into train / test / validation, use the top portion of this
+table to grab your test and validation, and the bottom portion
+as your training, to improve the accuracy of your local model
+optimization.
+
+```{r rank_ids_by_testprob}
+overall_train <- subset(overall_data, price_doc == 0)
+X_overall_train <- to_X(overall_train[,predictor_cols])
+overall_train_preds <- predict(xgb_model, X_overall_train$X)
+overall_train_ids_by_testprob <- data.frame(id=overall_train$id, testprob=overall_train_preds)
+overall_train_ids_by_testprob <- overall_train_ids_by_testprob[order(overall_train_ids_by_testprob$testprob, decreasing=TRUE),]
+
+save(overall_train_ids_by_testprob, file='overall_train_ids_by_testprob.Rdata')
+write.csv(overall_train_ids_by_testprob, file='overall_train_ids_by_testprob.csv', row.names=FALSE)
+```
+
+
+## Final thoughts.
+
+Good luck! I hope this helps you improve your scores.
+
+And if you can spare this an up-vote...
+
+
+## Postscript 2015-05-19
+
+Happycube asked if I'd tried omitting all the
+pre-2015 data, on grounds the early data was more ID-able than
+the later.
+
+That seemed worth a graph.
+
+Below is a EDCF plot showing the (cumulative) proportion of data
+points for each value of test probability.
+
+```{r}
+if (file.exists('overall_train_ids_by_testprob.Rdata')) {
+    load('overall_train_ids_by_testprob.Rdata')
+}
+train <- read.csv(input_filename('train.csv'))
+train$timestamp <- as.Date(train$timestamp)
+train$year <- lubridate::year(train$timestamp)
+testprob_by_year <- merge(train[,c('id','year')], overall_train_ids_by_testprob[,c('id','testprob')])
+
+testprob_by_year_ecdf <- do.call(
+    rbind, lapply(
+        with(testprob_by_year, min(year):max(year)), function(y) {
+            s <- subset(testprob_by_year, year == y)
+            ecdf_fn <- ecdf(s$testprob)
+            s$ecdf <- ecdf_fn(s$testprob)
+            s$year <- ordered(s$year)
+            return (s)
+        }))
+ggplot(aes(x=testprob, y=ecdf, group=year), data=testprob_by_year_ecdf)+geom_line(aes(color=year))+scale_color_manual(values=c('red', 'orange', 'yellow', 'green', 'blue'))
+```
+
+The vertical lines for years 2011 and 2012 show that all of the data
+from those years have ~0% probability of being test rows. About 50%
+of the data from 2013 is similar, but a small proportion of it looks
+like test data. 2014 is better and 2015 is best.
+
+My take on this is that discarding 2011 and 2012 is sensible, but I'd
+keep 2014. 2013 is a toss up, as keeping gives 50% more data to train
+on, but the data isn't especially relevant to the submission test set.
+
+Thanks, happycube!
+

@@ -1,0 +1,198 @@
+---
+title: "Model5"
+author: "rareitmeyer"
+date: "2017-06-09"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+# Extending model 3 with PCA
+
+Model 3 worked, but was disappointing as not scoring particularly well.
+So try Y-aware PCA to eliminate near-redundant columns.
+
+
+## Load the model3 data
+
+```{r load}
+source('common.R')
+
+predict_col <- 'price_doc'
+load('model3_overall_data_fe.Rdata')
+
+# transform predictions
+just_col(overall_data_fe, predict_col) <- log1p(just_col(overall_data_fe, predict_col))
+```
+
+## No PCA, just search for hyperparameters
+
+
+# Model with XGBoost
+
+Up the number of rounds 10x over model3 to see if that helps.
+
+```{r}
+
+
+library(caret)
+library(xgboost)
+library(foreach)
+library(doParallel)
+    
+parallelism <- 3
+doParallel::registerDoParallel(parallelism)
+foreach::getDoParWorkers()
+
+skipcols=c('id','disposition')    
+
+
+# XGBoost parameters
+param <- list(objective="reg:linear",
+              eval_metric = "rmse",
+              eta = .02,
+              gamma = 1,
+              max_depth = 4,
+              min_child_weight = 1,
+              subsample = .7,
+              colsample_bytree = .5
+)
+
+ctrl <- caret::trainControl(
+    method='repeatedcv',
+    number=5,
+    repeats=1,
+    search='random',
+    verboseIter=FALSE,
+    returnResamp='all',
+    savePredictions='final',
+    allowParallel=TRUE)
+grid <- expand.grid(
+    nrounds=1000,
+    eta=c(0.01, 0.02, 0.03, 0.05),
+    gamma=1,
+    max_depth=c(4,6,8),
+    subsample=c(0.6, 0.7, 0.8),
+    colsample_bytree=c(0.4, 0.5, 0.6),
+    min_child_weight=1
+)
+# shuffle the grid to process in random order
+set.seed(20170630)
+grid <- grid[sample(1:nrow(grid)),]
+
+rounds = 3000
+
+# do own grid search to save each model as it happens.
+# this will allow coming back later, and opening
+# up some partial results in another R session while
+# the main seach is still running.
+xmm <- model.matrix(~., data=sans_cols(just_disposition(overall_data_fe, 'train'), c(predict_col, skipcols)))
+train_X <- to_X(sans_cols(just_disposition(overall_data_fe, 'train'), c(predict_col, skipcols)), matrix_class=as.matrix)
+g2 <- do.call(rbind, lapply(1:nrow(grid), function(i) {
+    xgb_model <- caret::train(x=train_X$X,
+                         y=just_col(just_disposition(overall_data_fe, 'train'), predict_col),
+                         method='xgbTree',
+                         metric="RMSE",
+                         trControl=ctrl,
+                         tuneGrid=grid[i,],
+                         verbose=0,
+                         print.every.n=25)
+    save(i, grid, xgb_model, file=sprintf('model5_tune_xgb_model_%d.Rdata', i))
+    return (cbind(xgb_model$resample, # includes grid row.
+                      data.frame(everything_user=xgb_model$times$everything[1],
+                                 everything_system=xgb_model$times$everything[2],
+                                 everything_elapsed=xgb_model$times$everything[3],
+                                 final_user=xgb_model$times$final[1],
+                                 final_system=xgb_model$times$final[2],
+                                 final_elapsed=xgb_model$times$final[3])))
+}))
+    
+
+#xgb_model <- xgb.train(data = train_X$X,
+#                       params = param,
+#                       watchlist = list(train = train_X$X),
+#                       nrounds = rounds,
+#                       verbose = 0,
+#                       print.every.n = 25
+#)
+
+
+```
+
+## Look at models.
+
+```{r}
+g2 <- do.call(rbind, (lapply(1:nrow(grid), function(i) {
+    filename <- sprintf('model5_tune_xgb_model_%d.Rdata', i)
+    if (file.exists(filename)) {
+        load(filename)
+        return (cbind(xgb_model$results, 
+                      data.frame(everything_user=xgb_model$times$everything[1],
+                                 everything_system=xgb_model$times$everything[2],
+                                 everything_elapsed=xgb_model$times$everything[3],
+                                 final_user=xgb_model$times$final[1],
+                                 final_system=xgb_model$times$final[2],
+                                 final_elapsed=xgb_model$times$final[3])))
+    }
+    return (NULL)
+})))
+g2
+best_model <- which.min(g2$RMSE)
+
+print('best is')
+print(g2[best_model,])
+filename <- sprintf('model5_tune_xgb_model_%d.Rdata', best_model)
+load(filename)
+```
+
+
+
+## Top Features
+
+Look at the top feature importances.
+
+```{r}
+
+fi <- xgb.importance(names(overall_data_fe), model=xgb_model$finalModel)
+head(fi,10)
+
+xgb.plot.importance(fi[1:10,])
+```
+
+
+
+## Validation
+
+```{r}
+score_fn <- function(actual, predicted, data_is_log1_already=TRUE)
+{
+  return (sqrt(1/length(actual)*sum((actual-predicted)^2)))
+}
+train_preds <- predict(xgb_model, to_X(sans_cols(just_disposition(overall_data_fe, 'train'), c(predict_col, skipcols)), matrix_class=as.matrix)$X)
+print(sprintf('train score: %f', score_fn(just_col(subset(overall_data_fe, disposition=='train'),predict_col),train_preds)))
+
+test_preds <- predict(xgb_model, to_X(sans_cols(just_disposition(overall_data_fe, 'test'), c(predict_col, skipcols)),
+                                      matrix_class=as.matrix)$X)
+print(sprintf('test score: %f', score_fn(just_col(subset(overall_data_fe, disposition=='test'),predict_col),test_preds)))
+
+valid_preds <- predict(xgb_model, to_X(sans_cols(just_disposition(overall_data_fe, 'validation'), c(predict_col, skipcols)), matrix_class=as.matrix)$X)
+print(sprintf('validation score: %f', score_fn(just_col(subset(overall_data_fe, disposition=='validation'),predict_col),valid_preds)))
+
+```
+
+
+# submission predictions
+
+```{r}
+
+preds <- predict(xgb_model, to_X(sans_cols(just_disposition(overall_data_fe, 'submission'), c(predict_col, skipcols)), matrix_class=as.matrix)$X)
+preds <- expm1(preds)
+write.csv(data.frame(id=subset(overall_data_fe, disposition=='submission')$id, price_doc=preds), strftime(Sys.time(), "submission_%Y%m%d_%H%M%S.csv"), row.names=FALSE)
+```
+
+
+
+

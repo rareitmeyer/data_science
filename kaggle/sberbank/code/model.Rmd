@@ -1,0 +1,670 @@
+---
+title: "model.Rmd"
+author: "rareitmeyer"
+date: "May 15, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+# Model in R.
+
+This is intended to help get people started with initial modeling in R,
+by going through the main steps:
+
+* EDA
+* cleanup
+* imputation
+* feature engineering
+* modeling
+* hyperparameter tuning
+* comparing models
+* EDA on model errors
+
+
+# Load libraries and define utility functions
+
+This code uses ggplot2 for plotting, lubridate for some time-handing,
+caret as a workhorse modeling library, and car for power transformations.
+
+A handful of utility functions are also useful.
+
+```{r}
+library(ggplot2)
+library(lubridate)
+library(caret)
+library(car)
+
+input_filename <- function(name, dir=input_dir) {
+    file.path(input_dir, name)
+}
+
+sans_cols <- function(data, cols)
+{
+    return (data[,setdiff(names(data),cols)])
+}
+
+NA_colnames <- function(data)
+{
+    x <- sapply(names(data), function(col){sum(is.na(data[,col]))})
+    return(names(x[x > 0]))
+}
+
+# mark NAs en masse
+add_isna_cols <- function(data, na.value='<unknown>', skipcols=c(), progress=TRUE)
+{
+    for (col in setdiff(names(data), skipcols)) {
+        isna_col <- sprintf('%s_isna', col)
+        isna_idx <- is.na(data[,col])
+        if (any(isna_idx)) {
+            if (progress) print(sprintf("  add_isna_col processing %s", col))
+            if (is.character(data[,col])) {
+                data[isna_idx,col] <- na.value
+            } else if (is.factor(data[,col])) {
+                tmp <- as.character(data[,col])
+                tmp[isna_idx] <- na.value
+                data[,col] <- factor(tmp)
+            }
+            data[,isna_col] <- is.na(data[,col])
+        }
+    }
+    return(data)
+}
+
+
+# Apply power transformation to a data frame for numeric columns
+# matching some critera on number of unique levels and min/max ratio.
+powerTransformCols <- function (data, min_levels=10, min_max_ratio=10)
+{
+    retval <- c()
+    for (col in names(data)) {
+        if (is.numeric(data[,col]) &&
+            length(unique(data[,col])) > min_levels &&
+            min(data[,col]) > 0 &&
+            max(data[,col])/min(data[,col]) > min_max_ratio)
+        {
+            #lambda <- car::powerTransform(data[,col])
+            #print(sprintf('fixing column %s with power %f', col, lambda$lambda))
+            #data[,col] <- car::bcPower(data[,col], lambda$lambda)
+            retval <- c(retval, col)
+        }
+    }
+    return (retval)
+}
+
+fix_col_types <- function(data, newtype, cols, ...)
+{
+    for (col in cols) {
+        if (!(col %in% names(data))) {
+            stop(sprintf("column %s is not present in the data", col))
+        }
+        if (newtype == 'character') {
+            data[,col] <- as.character(data[,col])
+        } else if (newtype == 'Date') {
+            data[,col] <- as.Date(as.character(data[,col]), ...)
+        } else if (newtype == 'factor') {
+            data[,col] <- factor(data[,col])
+        } else if (newtype == 'integer') {
+            data[,col] <- as.integer(as.character(data[,col]))
+        } else if (newtype == 'numeric') {
+            data[,col] <- as.numeric(as.character(data[,col]))
+        } else if (newtype == 'boolean') {
+            data[,col] <- ifelse(tolower(as.character(data[,col])) %in% c('1', 'true', 't', 'yes', 'y'), 1, 0)
+        } else {
+            stop(sprintf("unrecognized type %s", newtype))
+        }
+    }
+    return (data)
+}
+
+```
+
+# Macro data
+
+The data is in three files. The macro(economic) data is something to add
+to both the test and the train records by joining on the timestamp. It makes
+more sense to do any cleanup of the macro records before joining, however,
+so will start with that.
+
+## Macro EDA
+
+```{r}
+
+input_dir = '../input'
+predict_col <- 'price_doc'
+macro <- read.csv(input_filename('macro.csv'))
+macro_drop_cols <- c()   # expect to find some columns to omit.
+
+macro$timestamp <- as.POSIXct(as.character(macro$timestamp))
+qplot(timestamp, oil_urals, data=macro, geom='line')
+qplot(timestamp, gdp_quart, data=macro, geom='line')
+qplot(timestamp, cpi, data=macro, geom='line')
+qplot(timestamp, ppi, data=macro, geom='line')
+qplot(timestamp, gdp_deflator, data=macro, geom='line')
+qplot(timestamp, balance_trade, data=macro, geom='line')
+qplot(timestamp, usdrub, data=macro, geom='line')
+qplot(timestamp, eurrub, data=macro, geom='line')
+qplot(timestamp, brent, data=macro, geom='line')
+qplot(timestamp, net_capital_export, data=macro, geom='line')
+qplot(timestamp, gdp_annual, data=macro, geom='line')
+qplot(timestamp, gdp_annual_growth, data=macro, geom='line')
+qplot(timestamp, average_provision_of_build_contract, data=macro, geom='line')
+qplot(timestamp, average_provision_of_build_contract_moscow, data=macro, geom='line')
+
+qplot(timestamp, rts, data=macro, geom='line')
+qplot(timestamp, micex, data=macro, geom='line')
+qplot(timestamp, deposits_value, data=macro, geom='line')
+qplot(timestamp, deposits_growth, data=macro, geom='line')
+qplot(timestamp, deposits_rate, data=macro, geom='line')
+qplot(timestamp, mortgage_value, data=macro, geom='line')
+qplot(timestamp, mortgage_growth, data=macro, geom='line')
+qplot(timestamp, mortgage_rate, data=macro, geom='line')
+qplot(timestamp, grp, data=macro, geom='line')
+qplot(timestamp, grp_growth, data=macro, geom='line')
+qplot(timestamp, income_per_cap, data=macro, geom='line')
+qplot(timestamp, real_dispos_income_per_cap_growth, data=macro, geom='line')
+qplot(timestamp, salary, data=macro, geom='line')
+qplot(timestamp, salary_growth, data=macro, geom='line')
+qplot(timestamp, fixed_basket, data=macro, geom='line')
+qplot(timestamp, retail_trade_turnover, data=macro, geom='line')
+qplot(timestamp, retail_trade_turnover_per_cap, data=macro, geom='line')
+qplot(timestamp, retail_trade_turnover_growth, data=macro, geom='line')
+qplot(timestamp, labor_force, data=macro, geom='line')
+qplot(timestamp, unemployment, data=macro, geom='line')
+qplot(timestamp, employment, data=macro, geom='line')
+qplot(timestamp, invest_fixed_capital_per_cap, data=macro, geom='line')
+qplot(timestamp, invest_fixed_assets, data=macro, geom='line')
+qplot(timestamp, profitable_enterpr_share, data=macro, geom='line')
+qplot(timestamp, unprofitable_enterpr_share, data=macro, geom='line')
+qplot(timestamp, share_own_revenues, data=macro, geom='line')
+qplot(timestamp, overdue_wages_per_cap, data=macro, geom='line')
+qplot(timestamp, fin_res_per_cap, data=macro, geom='line')
+qplot(timestamp, marriages_per_1000_cap, data=macro, geom='line')
+qplot(timestamp, divorce_rate, data=macro, geom='line')
+qplot(timestamp, construction_value, data=macro, geom='line')
+qplot(timestamp, invest_fixed_assets_phys, data=macro, geom='line')
+qplot(timestamp, pop_natural_increase, data=macro, geom='line')
+qplot(timestamp, pop_migration, data=macro, geom='line')
+qplot(timestamp, pop_total_inc, data=macro, geom='line')
+qplot(timestamp, childbirth, data=macro, geom='line')
+qplot(timestamp, mortality, data=macro, geom='line')
+qplot(timestamp, housing_fund_sqm, data=macro, geom='line')
+qplot(timestamp, lodging_sqm_per_cap, data=macro, geom='line')
+qplot(timestamp, water_pipes_share, data=macro, geom='line')
+# has just two values. Drop as likely noise
+macro_drop_cols <- c(macro_drop_cols, 'water_pipes_share')
+qplot(timestamp, baths_share, data=macro, geom='line')
+# has just two values. Drop as likely noise
+macro_drop_cols <- c(macro_drop_cols, 'baths_share')
+qplot(timestamp, sewerage_share, data=macro, geom='line')
+qplot(timestamp, gas_share, data=macro, geom='line')
+qplot(timestamp, hot_water_share, data=macro, geom='line')
+# has just three values. Drop as likely noise
+macro_drop_cols <- c(macro_drop_cols, 'hot_water_share')
+qplot(timestamp, electric_stove_share, data=macro, geom='line')
+qplot(timestamp, heating_share, data=macro, geom='line')
+# has just two values. Drop as likely noise
+macro_drop_cols <- c(macro_drop_cols, 'heating_share')
+qplot(timestamp, old_house_share, data=macro, geom='line')
+# has just two values. Drop as likely noise
+macro_drop_cols <- c(macro_drop_cols, 'old_house_share')
+qplot(timestamp, average_life_exp, data=macro, geom='line')
+qplot(timestamp, infant_mortarity_per_1000_cap, data=macro, geom='line')
+qplot(timestamp, perinatal_mort_per_1000_cap, data=macro, geom='line')
+qplot(timestamp, incidence_population, data=macro, geom='line')
+qplot(timestamp, rent_price_4.room_bus, data=macro, geom='line')
+qplot(timestamp, rent_price_3room_bus, data=macro, geom='line')
+qplot(timestamp, rent_price_2room_bus, data=macro, geom='line')
+qplot(timestamp, rent_price_1room_bus, data=macro, geom='line')
+qplot(timestamp, rent_price_3room_eco, data=macro, geom='line')
+qplot(timestamp, rent_price_2room_eco, data=macro, geom='line')
+# problem with Feb 2013.
+qplot(timestamp, rent_price_2room_eco, data=subset(macro, timestamp >='2013-01-01' & timestamp <= '2013-04-01'), geom='line')
+qplot(timestamp, rent_price_1room_eco, data=macro, geom='line')
+# problem with May 2013... or what looks like one.
+qplot(timestamp, rent_price_1room_eco, data=subset(macro, timestamp >='2013-02-01' & timestamp <= '2013-07-01'), geom='line')
+qplot(timestamp, load_of_teachers_preschool_per_teacher, data=macro, geom='line')
+qplot(timestamp, child_on_acc_pre_school, data=macro, geom='line')
+# Have a #! level.
+qplot(timestamp, load_of_teachers_school_per_teacher, data=macro, geom='line')
+qplot(timestamp, students_state_oneshift, data=macro, geom='line')
+qplot(timestamp, modern_education_share, data=macro, geom='line')
+# three values, mostl NA. drop.
+macro_drop_cols <- c(macro_drop_cols, 'modern_education_share')
+qplot(timestamp, old_education_build_share, data=macro, geom='line')
+# three values, mostl NA. drop.
+macro_drop_cols <- c(macro_drop_cols, 'old_education_build_share')
+qplot(timestamp, provision_doctors, data=macro, geom='line')
+qplot(timestamp, provision_nurse, data=macro, geom='line')
+qplot(timestamp, load_on_doctors, data=macro, geom='line')
+qplot(timestamp, power_clinics, data=macro, geom='line')
+qplot(timestamp, hospital_beds_available_per_cap, data=macro, geom='line')
+qplot(timestamp, hospital_bed_occupancy_per_year, data=macro, geom='line')
+qplot(timestamp, provision_retail_space_sqm, data=macro, geom='line')
+# two values, drop
+macro_drop_cols <- c(macro_drop_cols, 'provision_retail_space_sqm')
+qplot(timestamp, provision_retail_space_modern_sqm, data=macro, geom='line')
+# two values, drop
+macro_drop_cols <- c(macro_drop_cols, 'provision_retail_space_modern_sqm')
+qplot(timestamp, turnover_catering_per_cap, data=macro, geom='line')
+qplot(timestamp, theaters_viewers_per_1000_cap, data=macro, geom='line')
+qplot(timestamp, seats_theather_rfmin_per_100000_cap, data=macro, geom='line')
+qplot(timestamp, museum_visitis_per_100_cap, data=macro, geom='line')
+qplot(timestamp, bandwidth_sports, data=macro, geom='line')
+qplot(timestamp, population_reg_sports_share, data=macro, geom='line')
+qplot(timestamp, students_reg_sports_share, data=macro, geom='line')
+qplot(timestamp, apartment_build, data=macro, geom='line')
+qplot(timestamp, apartment_fund_sqm, data=macro, geom='line')
+```
+
+## Macro fixes
+
+Clean up mortgag value to create a new mortgage value montonic column.
+
+Drop a handful of columns with a very small number of values that look
+uninteresting.
+
+The rent price room eco data also looks like it has a suspicious value
+or two in it. Remove those to impute them with something more likely.
+
+
+```{r}
+# mortgage_value clearly resets every Feb 1.
+macro$mortgage_value_montonic <- macro$mortgage_value
+jan31_value <- 0
+for (year in lubridate::year(min(macro$timestamp)):lubridate::year(max(macro$timestamp))) {
+    jan31_value <- jan31_value + subset(macro, timestamp==as.POSIXct(sprintf('%d-01-31', year)))$mortgage_value
+    idx <- which(macro$timestamp >= as.POSIXct(sprintf('%d-02-01', year)) & macro$timestamp < as.POSIXct(sprintf('%d-02-01', year+1)))
+    macro[idx,'mortgage_value_montonic'] <- jan31_value + macro[idx,'mortgage_value_montonic']
+}
+# macro_drop_cols <- c('water_pipes_share', 'baths_share', 'hot_water_share', 'heating_share', 'old_house_share', 'modern_education_share', 'old_education_build_share', 'provision_retail_space_sqm', 'provision_retail_space_modern_sqm')
+for (col in macro_drop_cols) {
+    macro[,col] <- NULL
+}
+idx <- which(macro$rent_price_2room_eco == 0.1)
+macro[idx,'rent_price_2room_eco'] <- NA
+idx <- which(macro$rent_price_1room_eco == 2.31)
+macro[idx,'rent_price_1room_eco'] <- NA
+macro[,'child_on_acc_pre_school'] <- as.character(macro[,'child_on_acc_pre_school'])
+idx <- which(macro[,'child_on_acc_pre_school'] %in% c('#!'))
+macro[idx, 'child_on_acc_pre_school'] <- NA
+macro[,'child_on_acc_pre_school'] <- as.numeric(sub(',', '', macro[, 'child_on_acc_pre_school']))
+
+
+qplot(timestamp, mortgage_value_montonic, data=macro, geom='line')
+
+# confirm we've already removed the near zero variance columns
+macro_nzv <- caret::nearZeroVar(macro)
+stopifnot(length(macro_nzv) == 0)
+```
+
+
+## Macro imputation
+
+Some modeling algorithms deal poorly with missing values, so
+impute values where needed. Don't want to lose the NA-ness entirely
+however, so add a 'unknown' level to factors, and a isna column
+for each numeric column.
+
+```{r}
+macro_cleaned <- add_isna_cols(macro)
+macro_imputer <- caret::preProcess(macro_cleaned, method=c('bagImpute'))
+macro_preproc <- predict(macro_imputer, macro_cleaned)
+
+print(sprintf('after imputation, have %d NAs in macro data', sum(is.na(macro_preproc))))
+macro_pt_cols <- powerTransformCols(macro_preproc)
+macro_pt <- caret::preProcess(macro_preproc[,macro_pt_cols], method='YeoJohnson')
+macro_preproc2 <- cbind(sans_cols(macro_preproc, macro_pt_cols), predict(macro_pt, macro_preproc[,macro_pt_cols]))
+write.csv(macro_preproc2, 'macro_preproc2.csv', row.names=FALSE)
+save(macro_preproc2, file='macro_preproc2.Rdata')
+```
+
+
+# Load train and test data and fix column types
+
+Load the property-specific data, and fix column types. It's actually easiest
+to do this by combining test and train into one data frame, and cleaning that.
+
+```{r}
+train <- read.csv(input_filename('train.csv'))
+train$timestamp <- as.POSIXct(train$timestamp)
+test <- read.csv(input_filename('test.csv'))
+test$timestamp <- as.POSIXct(test$timestamp)
+
+overall_train <- merge(train, macro_preproc2, by='timestamp')
+overall_test <- merge(cbind(test, price_doc=NA), macro_preproc2, by='timestamp')
+overall_data <- rbind(cbind(overall_train, istrain=TRUE),
+                      cbind(overall_test, istrain=FALSE))
+
+
+# fix a few column types
+overall_data <- fix_col_types(overall_data, 'Date',
+                              'timestamp')
+overall_data <- fix_col_types(overall_data, 'numeric',
+                              c('full_sq', 'life_sq', 'kitch_sq',
+                                'area_m',
+                                'raion_popul',
+                                'child_on_acc_pre_school'))
+overall_data <- fix_col_types(overall_data, 'integer',
+                              c('floor', 'max_floor',
+                                'build_year',
+                                'state',
+                                'num_room'))
+
+overall_data <- fix_col_types(overall_data, 'factor',
+                              c('material',
+                                'state',
+                                'product_type',
+                                'sub_area',
+                                'ID_metro',
+                                'ID_railroad_station_walk',
+                                'ID_railroad_station_avto',
+                                'ID_big_road1',
+                                'ID_big_road2',
+                                'ID_railroad_terminal',
+                                'ID_bus_terminal',
+                                'child_on_acc_pre_school'))
+overall_data <- fix_col_types(overall_data, 'boolean',
+                              c('culture_objects_top_25',
+                                'thermal_power_plant_raion',
+                                'incineration_raion',
+                                'oil_chemistry_raion',
+                                'radiation_raion',
+                                'railroad_terminal_raion',
+                                'big_market_raion',
+                                'nuclear_reactor_raion',
+                                'detention_facility_raion',
+                                'water_1line',
+                                'big_road1_1line',
+                                'railroad_1line'))
+
+
+# Now re-create overall_train
+overall_train <- subset(overall_data, istrain==TRUE)
+```
+
+## Partition the original train data into train, validate and test
+
+Break overall_train into three sets, train, validate and test
+as 60:20:20 split
+
+```{r}
+# Partition data
+# set seed as contest completion date for repeatability
+set.seed(20170529)
+overall_train_idx <- 1:nrow(overall_train)
+train_idx <- caret::createDataPartition(overall_data[overall_train_idx,predict_col], p=0.6, list=FALSE)
+non_train <- overall_data[setdiff(overall_train_idx, train_idx),]
+train <- overall_data[train_idx,]
+validation_idx <- caret::createDataPartition(non_train[,predict_col], p=0.5, list=FALSE)
+validation <- non_train[validation_idx,]
+test <- non_train[-c(validation_idx),]
+submission_test <- overall_data[-overall_train_idx,]
+```
+
+# Clean up.
+
+## full_sq and life_sq
+
+Have life sq < 5 or full sq < 5 is probably an error. Remove to impute later.
+Also have full sq < life sq, usually by a lot. *Guess* that this is a coding
+error and full is accidentally recorded as the extra.
+
+
+```{r}
+qplot(life_sq, full_sq, data=overall_data)+scale_x_log10()+scale_y_log10()
+overall_data$life_sq[overall_data$life_sq < 5] <- NA
+overall_data$full_sq[overall_data$full_sq < 5] <- NA
+
+
+idx <- overall_data$full_sq < overall_data$life_sq
+idx <- !is.na(idx) & idx
+overall_data$full_sq[idx] <- overall_data$life_sq[idx] + overall_data$full_sq[idx]
+```
+
+## floor
+
+Have max floor < floor in 2136 cases. Assume floor is more accurate
+than max floor.
+
+```{r}
+qplot(floor, max_floor, data=overall_data)
+
+idx <- with(overall_data, full_sq < life_sq)
+overall_data$max_floor[idx] <- NA
+```
+
+# Material.
+
+Have only two points, one test and one train, of material==3.
+Drop.
+
+```{r}
+qplot(material, data=overall_data)
+
+idx <- with(overall_data, material == 3)
+overall_data$material[idx] <- NA
+```
+
+# Build year
+
+Build year spans a huge range, from 0 to 20052009. Assume numbers
+before 1860 are bad, as is 4965. Convert 20092005 into 2007 as a
+guess.
+
+```{r}
+qplot(build_year, data=overall_data)
+print(xtabs(~subset(overall_data, build_year < 1860 | build_year > 2017)$build_year))
+overall_data$build_year[overall_data$build_year < 1860] <- NA
+overall_data$build_year[overall_data$build_year == 20052009] <- 2007 # guess
+overall_data$build_year[overall_data$build_year == 4965] <- NA
+```
+
+
+## num rooms
+
+Less than 1 room is probably incorrect.
+
+```{r}
+qplot(num_room, data=overall_data)
+overall_data$num_room[overall_data$num_room < 1] <- NA
+```
+
+## kitchen sq
+
+Have some kitchen sq that look like build years. Use those to
+guess a build year. Have many that look the same size (or bigger than)
+the life or full sq. Clear those.
+
+```{r}
+qplot(kitch_sq, data=overall_data)
+idx <- with(overall_data, kitch_sq > 1000 & is.na(build_year))
+idx <- !is.na(idx) & idx
+overall_data$build_year[idx] <- overall_data$kitch_sq[idx]
+idx <- with(overall_data, life_sq & kitch_sq >= life_sq)
+idx <- !is.na(idx) & idx
+overall_data$kitch_sq[idx] <- NA
+idx <- with(overall_data, full_sq & kitch_sq >= full_sq)
+idx <- !is.na(idx) & idx
+overall_data$kitch_sq[idx] <- NA
+```
+
+## State
+```{r}
+plot(overall_data$state)
+# Have at least one point in state > 4 which looks odd. And turn into a factor.
+overall_data$state[overall_data$state == '33'] <- NA
+
+```
+
+
+
+
+# Impute missing values.
+
+Add a value-is-missing column and remove near-zero variance
+columns, in prep for imputing values and transforming.
+
+```{r}
+overall_data <- add_isna_cols(overall_data, skipcols=predict_col)
+write.csv(overall_data, 'overall_data.csv', row.names=FALSE)
+save(overall_data, file='overall_data.Rdata')
+
+# Re-partition data after clean up
+set.seed(20170529)
+overall_train_idx <- 1:nrow(overall_train)
+train_idx <- caret::createDataPartition(overall_data[overall_train_idx,predict_col], p=0.6, list=FALSE)
+non_train <- overall_data[setdiff(overall_train_idx, train_idx),]
+train <- overall_data[train_idx,]
+validation_idx <- caret::createDataPartition(non_train[,predict_col], p=0.5, list=FALSE)
+validation <- non_train[validation_idx,]
+test <- non_train[-c(validation_idx),]
+submission_test <- overall_data[-overall_train_idx,]
+
+
+
+# Remove zero variation columns
+nzv <- names(train)[caret::nearZeroVar(train)]
+train <- sans_cols(train, nzv)
+```
+
+## Impute and transform
+
+Use caret::preProcess to impute.
+
+```{r}
+
+preprocessor <- function(train, ..., extra_na_cols=c(), drop_cols=c())
+{
+  na_cols <- union(NA_colnames(sans_cols(train, union(drop_cols,predict_col))), extra_na_cols)
+  non_na_cols <- setdiff(names(train), union(union(na_cols,drop_cols),predict_col))
+                        
+  # do bagImpute on just the NA columns... takes too much memory to do on all cols
+  train_preproc_i <- caret::preProcess(train[,na_cols], method='bagImpute')
+  train_preproc <- cbind(train[,non_na_cols], predict(train_preproc_i, train[,na_cols]))
+  
+  print(sprintf('after imputation, have %d NAs in train data', sum(is.na(train_preproc))))
+  train_pt_cols <- setdiff(powerTransformCols(train_preproc), 'id')
+  print(c('power tranformation columns are', train_pt_cols))
+  train_pt <- caret::preProcess(train_preproc[,train_pt_cols], method='YeoJohnson')
+  train_preproc2 <- cbind(sans_cols(train_preproc, train_pt_cols), predict(train_pt, train_preproc[,train_pt_cols]))
+  train_preproc2[,predict_col] <- train[,predict_col]
+  
+  retval <- list(train=train_preproc2)
+  other_df <- list(...)
+  for (df in other_df) {
+    print('processing additional df')
+    df_preproc <- cbind(df[,non_na_cols], predict(train_preproc_i, df[,na_cols]))
+    df_preproc2 <- cbind(sans_cols(df_preproc, train_pt_cols), predict(train_pt, df_preproc[,train_pt_cols]))
+    df_preproc2[,predict_col] <- df[,predict_col]
+    retval[[length(retval)+1]] <- df_preproc2
+  }
+  return (retval)
+}
+
+# Note submission data has missing values for 'green_part_2000' even though 
+# it is always non-NA in the train data 
+preprocessed <- preprocessor(train, test, validation, submission_test, extra_na_cols='green_part_2000', drop_cols=nzv)
+names(preprocessed) <- c('train_i', 'test_i', 'validation_i', 'submission_test_i')
+save(preprocessed, file='preprocessed.Rdata')
+train_i <- preprocessed[[1]]
+test_i <- preprocessed[[2]]
+validation_i <- preprocessed[[3]]
+submission_test_i <- preprocessed[[4]]
+
+print(sprintf('after preprocessor step, have %d NAs in train_i data', sum(is.na(train_i))))
+print(sprintf('after preprocessor step, have %d NAs in test_i data', sum(is.na(test_i))))
+print(sprintf('after preprocessor step, have %d NAs in validation_i data', sum(is.na(validation_i))))
+print(sprintf('after preprocessor step, have %d NAs in submission_test_i data', sum(is.na(submission_test_i))))
+stopifnot(NA_colnames(train_i) == c())
+stopifnot(NA_colnames(test_i) == c())
+stopifnot(NA_colnames(validation_i) == c())
+stopifnot(NA_colnames(submission_test_i) == predict_col)
+```
+
+
+
+# Model
+
+```{r}
+library(Matrix)
+library(xgboost)
+
+cvFoldsList <- createFolds(train_i$price_doc, k=5, list=TRUE, returnTrain=FALSE)
+train_i[,predict_col] = log1p(as.integer(train[,predict_col]))
+test_i[,predict_col]  = log1p(as.integer(test[,predict_col]))
+validation_i[,predict_col]  = log1p(as.integer(validation[,predict_col]))
+
+to_X <- function(data, label=NULL) {
+  if (is.null(label)) {
+    return (xgboost::xgb.DMatrix(model.matrix(~., data=sans_cols(data, c(predict_col, 'id')))))
+  } else {
+    return (xgboost::xgb.DMatrix(model.matrix(~., data=sans_cols(data, c(predict_col, 'id'))), label=label))
+  }
+}
+#train_sparse <- model.matrix(~., data=sans_cols(train_i, c(predict_col, 'id')))
+#test_sparse <- model.matrix(~., data=sans_cols(submission_test_i, c(predict_col, 'id')))
+
+gc()  # garbage collection
+mtrain <- to_X(train_i, label=train_i[,predict_col])
+mtest <- to_X(test_i, test_i[,predict_col])
+mvalidation <- to_X(validation_i, validation_i[,predict_col])
+msubmission_test <- to_X(submission_test_i)
+gc()
+
+
+# XGBoost parameters
+param <- list(objective="reg:linear",
+              eval_metric = "rmse",
+              eta = .02,
+              gamma = 1,
+              max_depth = 4,
+              min_child_weight = 1,
+              subsample = .7,
+              colsample_bytree = .5
+)
+
+rounds = 300
+xgb_model <- xgb.train(data = mtrain,
+                       params = param,
+                       watchlist = list(train = mtrain),
+                       nrounds = rounds,
+                       verbose = 0,
+                       print.every.n = 25
+)
+gc()
+
+```
+
+# Validation
+
+```{r}
+score_fn <- function(actual, predicted, data_is_log1_already=TRUE)
+{
+  return (sqrt(1/length(actual)*sum((actual-predicted)^2)))
+}
+train_preds <- predict(xgb_model, mtrain)
+print(sprintf('train score: %f', score_fn(train_i[,predict_col],train_preds)))
+
+test_preds <- predict(xgb_model, mtest)
+print(sprintf('test score: %f', score_fn(test_i[,predict_col],test_preds)))
+
+valid_preds <- predict(xgb_model, mvalidation)
+print(sprintf('validation score: %f', score_fn(validation_i[,predict_col],valid_preds)))
+
+```
+
+# Predictions
+
+```{r}
+
+preds <- predict(xgb_model,msubmission_test)
+preds <- expm1(preds)
+write.csv(data.frame(id=submission_test_i$id, price_doc=preds), strftime(Sys.time(), "submission_%Y%m%d_%H%M%S.csv"), row.names=FALSE)
+```
+
+
+

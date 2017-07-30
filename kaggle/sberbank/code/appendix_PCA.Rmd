@@ -1,0 +1,144 @@
+---
+title: "Predicting Exercise Proficiency -- Appendix"
+author: "R. A. Reitmeyer"
+date: "January 31, 2017"
+output: 
+  html_document: 
+    keep_md: yes
+---
+
+## Visualization with Y-Aware PCA
+
+Basic PCA is column-agnostic. A newer technique, "Y-aware PCA", aims to
+help make dimension reduction respect the response variable by centering
+and scaling all of the "X" columns with respect a fit of response ~ column,
+then taking principle components of that. Originally developed for regression,
+it can be extended to binary classification via logistic regression. Extending
+it further to multi-class classification requires a series of one-vs-all fits.
+
+```{r}
+# get coefficient for a single column, for a single class
+yaware_pca_m <- function(x, is_class) {
+  f <- glm(is_class ~ x, family='binomial')
+  return(f$coef[2])
+}
+# get all coefficients, for a single class.
+yaware_pca_all_ms <- function(data, is_class) {
+  return(sapply(data, function(x){yaware_pca_m(x,is_class)}))
+}
+# rescale (and center) a single column for a single class.
+yaware_pca_rescale_one <- function(x, m) {
+  return(m*x-mean(m*x))
+}
+# rescale all columns for a single class
+yaware_pca_rescale_all<- function(data, all_ms) {
+  return(
+    sapply(1:length(all_ms),
+           function(i){yaware_pca_rescale_one(data[,i], all_ms[i])}))
+}
+
+# get variances from a PCA.
+pca_explained_variances <- function(p) {
+  return(cumsum(p$sdev^2)/sum(p$sdev^2))
+}
+
+# Work out the re-scaled, re-centered 'X' values for Y-aware
+# PCA, and apply PCA. Will have five sets of PCA'd data,
+# (one for each classe A..E, in a one-vs-rest fashion), in a list.
+make_y_aware_pca_rotations <- function(data, ms_list)
+{
+  yaware_pca_list <- lapply(
+    ms_list,
+    function(ms) {
+      prcomp(yaware_pca_rescale_all(data[,predict_cols], ms),
+             center=FALSE, scale=FALSE)$rotation
+      }
+    )
+  return(yaware_pca_list)
+}
+
+# Form a new training 'X' data frame for given data, based on a list of all m
+# coefficients for each class, and the PCA rotations for each class. Limit
+# each class's PCA columns to Ncols columns.
+make_y_aware_pca_x <- function(data, ms_list, rotation_list, Ncols=5) {
+  # Work out the re-scaled, re-centered 'X' values for Y-aware
+  # PCA, and apply PCA. Will have five sets of PCA'd data,
+  # (one for each classe A..E, in a one-vs-rest fashion), in a list.
+  retval <- as.data.frame(do.call(cbind, lapply(
+    1:min(length(ms_list), length(rotation_list)),
+    function(i) {
+      (yaware_pca_rescale_all(data[,predict_cols], ms_list[[i]]) %*% rotation_list[[i]])[,1:Ncols]
+      }
+    )
+  ))
+  new_names <- c(sapply(c('A','B','C','D','E'), function(class_name) { sprintf('pca_%s%02d', class_name, 1:Ncols) }))
+  names(retval) <-  new_names
+  return(retval)
+}
+
+# Form a data frame with both X and the response
+make_yaware_pca_xy <- function(data, ms_list, rotation_list, Ncols, respcolname='classe') {
+  x <- make_y_aware_pca_x(data[,setdiff(names(data),respcolname)], ms_list, rotation_list, Ncols)
+  retval <- cbind(x, data[,respcolname])
+  names(retval)[length(names(retval))] <- respcolname
+  return(retval)
+}
+
+# Not shown, but the first 5 columns explain 70-80% of the variance,
+# and first 10 columns explain about 90% of the variance.
+
+# collect m values for variable, for each classe.
+train_ms_ABCDE <- lapply(
+  c('A','B','C','D','E'),
+  function(classe_name) {
+    yaware_pca_all_ms(train[,predict_cols],
+                      train[,'classe']==classe_name)
+    }
+  )
+# compute the rotation matricies.
+train_rotations_ABCDE <- make_y_aware_pca_rotations(train, train_ms_ABCDE)
+
+# Make train / test / validation sets based on Y aware PCA, carefully using
+# the scale factors and rotation matricies from the train data for test and
+# validation data
+train_yaware_pca_xy_10 <- make_yaware_pca_xy(train, train_ms_ABCDE, train_rotations_ABCDE, 10)
+test_yaware_pca_xy_10 <- make_yaware_pca_xy(test, train_ms_ABCDE, train_rotations_ABCDE, 10)
+validation_yaware_pca_xy_10 <- make_yaware_pca_xy(validation, train_ms_ABCDE, train_rotations_ABCDE, 10)
+```
+
+Performed as one-vs-rest, Y-aware PCA can help separate classes in many cases,
+though not every case. Across the one-vs-rest PCAs, 10 columns retain ~90% of
+the variance. The author originally expected this to assist in model fitting.
+
+```{r, fig.width=6, fig.height=8}
+par(mfcol=c(3,2))
+plot_pca_x(train_yaware_pca_xy_10,  1,  2, train[,'classe'])
+plot_pca_x(train_yaware_pca_xy_10, 11, 12, train[,'classe'])
+plot_pca_x(train_yaware_pca_xy_10, 21, 22, train[,'classe'])
+plot_pca_x(train_yaware_pca_xy_10, 31, 32, train[,'classe'])
+plot_pca_x(train_yaware_pca_xy_10, 41, 42, train[,'classe'])
+par(mfcol=c(1,1))
+```
+
+
+
+
+## Sidebar: PCA fits in practice
+
+As a side note, predictions with the Y-aware PCA columns turned out to be
+not quite as good as training on the original columns.
+
+```{r}
+mf_pca_10_cv <- manyfits_caret(train_yaware_pca_xy_10, "classe ~ .",
+                               c('gbm','rf','ctree','lda','mda'),
+                               data_name='train_pca10_cv',
+                               trControl=caret::trainControl(method='cv'))
+```
+
+The best test set accuracies are only
+```r round(acc(mf_pca_10_cv[[2]]$fit, test_yaware_pca_xy_10),5)```
+and
+```r round(acc(mf_pca_10_cv[[1]]$fit, test_yaware_pca_xy_10),5)```
+for methods ```r mf_pca_10_cv[[2]]$method``` and
+```r mf_pca_10_cv[[2]]$method``` respectively.
+

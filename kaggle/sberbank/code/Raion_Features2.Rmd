@@ -1,0 +1,625 @@
+---
+title: "Raion Features 2"
+author: "R. A. Reitmeyer"
+date: '2017-06-12'
+output:
+  html_document: default
+  html_notebook: default
+---
+
+Looked at Raion features earlier, but there's a nice post that delved
+into the discrepancy between raion_popul and full_all a bit more,
+and so I'll revisit my own work.
+
+See [https://www.kaggle.com/aralai/full-all-vs-raion-popul/notebook]
+
+
+```{r setup, include=FALSE, echo=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+
+source('common.R')
+
+library(ggplot2)
+library(dplyr)
+```
+
+## Load data
+
+```{r}
+train <- read.csv(input_filename('train.csv'))
+test <- read.csv(input_filename('test.csv'))
+
+overall_data <- rbind(cbind(train, istrain=TRUE),
+                      cbind(test, price_doc=NA, istrain=FALSE))
+overall_data$timestamp <- as.Date(overall_data$timestamp)
+                          
+overall_data <- fix_col_types(overall_data, 'numeric',
+                              c('full_sq', 'life_sq', 'kitch_sq',
+                                'area_m',
+                                'raion_popul'))
+overall_data <- fix_col_types(overall_data, 'integer',
+                              c('floor', 'max_floor',
+                                'build_year',
+                                'state',
+                                'num_room'))
+
+overall_data <- fix_col_types(overall_data, 'factor',
+                              c('material',
+                                'state',
+                                'product_type',
+                                'sub_area',
+                                'ID_metro',
+                                'ID_railroad_station_walk',
+                                'ID_railroad_station_avto',
+                                'ID_big_road1',
+                                'ID_big_road2',
+                                'ID_railroad_terminal',
+                                'ID_bus_terminal'))
+overall_data <- fix_col_types(overall_data, 'boolean',
+                              c('culture_objects_top_25',
+                                'thermal_power_plant_raion',
+                                'incineration_raion',
+                                'oil_chemistry_raion',
+                                'radiation_raion',
+                                'railroad_terminal_raion',
+                                'big_market_raion',
+                                'nuclear_reactor_raion',
+                                'detention_facility_raion',
+                                'water_1line',
+                                'big_road1_1line',
+                                'railroad_1line'))
+        
+```
+
+## Test and train data dependency on raion
+
+```{r}
+
+
+raion_features <- c(
+    'area_m',
+    'raion_popul',
+    'green_zone_part',
+    'indust_part',
+    'children_preschool',
+    'preschool_quota',
+    'preschool_education_centers_raion',
+    'children_school',
+    'school_quota',
+    'school_education_centers_raion',
+    'school_education_centers_top_20_raion',
+    'hospital_beds_raion',
+    'healthcare_centers_raion',
+    'university_top_20_raion',
+    'sport_objects_raion',
+    'additional_education_raion',
+    'culture_objects_top_25',
+    'culture_objects_top_25_raion',
+    'shopping_centers_raion',
+    'office_raion',
+    'thermal_power_plant_raion',
+    'incineration_raion',
+    'oil_chemistry_raion',
+    'radiation_raion',
+    'railroad_terminal_raion',
+    'big_market_raion',
+    'nuclear_reactor_raion',
+    'detention_facility_raion',
+    'full_all',
+    'male_f',
+    'female_f',
+    'young_all',
+    'young_male',
+    'young_female',
+    'work_all',
+    'work_male',
+    'work_female',
+    'ekder_all',
+    'ekder_male',
+    'ekder_female',
+    'X0_6_all',
+    'X0_6_male',
+    'X0_6_female',
+    'X7_14_all',
+    'X7_14_male',
+    'X7_14_female',
+    'X0_17_all',
+    'X0_17_male',
+    'X0_17_female',
+    'X16_29_all',
+    'X16_29_male',
+    'X16_29_female',
+    'X0_13_all',
+    'X0_13_male',
+    'X0_13_female',
+    'raion_build_count_with_material_info',
+    'build_count_block',
+    'build_count_wood',
+    'build_count_frame',
+    'build_count_brick',
+    'build_count_monolith',
+    'build_count_panel',
+    'build_count_foam',
+    'build_count_slag',
+    'build_count_mix',
+    'raion_build_count_with_builddate_info',
+    'build_count_before_1920',
+    'build_count_1921.1945',
+    'build_count_1946.1970',
+    'build_count_1971.1995',
+    'build_count_after_1995'
+)
+
+# start of distance features
+distance_features <- c(
+    'ID_metro',
+    'metro_min_avto',
+    'metro_km_avto',
+    'metro_min_walk',
+    'metro_km_walk',
+    'kindergarten_km',
+    'school_km',
+    'park_km',
+    'green_zone_km',
+    'industrial_km',
+    'water_treatment_km',
+    'cemetery_km',
+    'incineration_km',
+    'railroad_station_walk_km',
+    'railroad_station_walk_min',
+    'ID_railroad_station_walk',
+    'railroad_station_avto_km',
+    'railroad_station_avto_min',
+    'ID_railroad_station_avto',
+    'public_transport_station_km',
+    'public_transport_station_min_walk',
+    'water_km',
+    'water_1line',
+    'mkad_km',
+    'ttk_km',
+    'sadovoe_km',
+    'bulvar_ring_km',
+    'kremlin_km',
+    'big_road1_km',
+    'ID_big_road1',
+    'big_road1_1line',
+    'big_road2_km',
+    'ID_big_road2',
+    'railroad_km',
+    'railroad_1line',
+    'zd_vokzaly_avto_km',
+    'ID_railroad_terminal',
+    'bus_terminal_avto_km',
+    'ID_bus_terminal',
+    'oil_chemistry_km',
+    'nuclear_reactor_km',
+    'radiation_km',
+    'power_transmission_line_km',
+    'thermal_power_plant_km',
+    'ts_km',
+    'big_market_km',
+    'market_shop_km',
+    'fitness_km',
+    'swim_pool_km',
+    'ice_rink_km',
+    'stadium_km',
+    'basketball_km',
+    'hospice_morgue_km',
+    'detention_facility_km',
+    'public_healthcare_km',
+    'university_km',
+    'workplaces_km',
+    'shopping_centers_km',
+    'office_km',
+    'additional_education_km',
+    'preschool_km',
+    'big_church_km',
+    'church_synagogue_km',
+    'mosque_km',
+    'theater_km',
+    'museum_km',
+    'exhibition_km',
+    'catering_km'
+)
+
+# end of distance features
+locality_features <- c(
+    'ecology',
+    'green_part_500',
+    'prom_part_500',
+    'office_count_500',
+    'office_sqm_500',
+    'trc_count_500',
+    'trc_sqm_500',
+    'cafe_count_500',
+    'cafe_sum_500_min_price_avg',
+    'cafe_sum_500_max_price_avg',
+    'cafe_avg_price_500',
+    'cafe_count_500_na_price',
+    'cafe_count_500_price_500',
+    'cafe_count_500_price_1000',
+    'cafe_count_500_price_1500',
+    'cafe_count_500_price_2500',
+    'cafe_count_500_price_4000',
+    'cafe_count_500_price_high',
+    'big_church_count_500',
+    'church_count_500',
+    'mosque_count_500',
+    'leisure_count_500',
+    'sport_count_500',
+    'market_count_500',
+    'green_part_1000',
+    'prom_part_1000',
+    'office_count_1000',
+    'office_sqm_1000',
+    'trc_count_1000',
+    'trc_sqm_1000',
+    'cafe_count_1000',
+    'cafe_sum_1000_min_price_avg',
+    'cafe_sum_1000_max_price_avg',
+    'cafe_avg_price_1000',
+    'cafe_count_1000_na_price',
+    'cafe_count_1000_price_500',
+    'cafe_count_1000_price_1000',
+    'cafe_count_1000_price_1500',
+    'cafe_count_1000_price_2500',
+    'cafe_count_1000_price_4000',
+    'cafe_count_1000_price_high',
+    'big_church_count_1000',
+    'church_count_1000',
+    'mosque_count_1000',
+    'leisure_count_1000',
+    'sport_count_1000',
+    'market_count_1000',
+    'green_part_1500',
+    'prom_part_1500',
+    'office_count_1500',
+    'office_sqm_1500',
+    'trc_count_1500',
+    'trc_sqm_1500',
+    'cafe_count_1500',
+    'cafe_sum_1500_min_price_avg',
+    'cafe_sum_1500_max_price_avg',
+    'cafe_avg_price_1500',
+    'cafe_count_1500_na_price',
+    'cafe_count_1500_price_500',
+    'cafe_count_1500_price_1000',
+    'cafe_count_1500_price_1500',
+    'cafe_count_1500_price_2500',
+    'cafe_count_1500_price_4000',
+    'cafe_count_1500_price_high',
+    'big_church_count_1500',
+    'church_count_1500',
+    'mosque_count_1500',
+    'leisure_count_1500',
+    'sport_count_1500',
+    'market_count_1500',
+    'green_part_2000',
+    'prom_part_2000',
+    'office_count_2000',
+    'office_sqm_2000',
+    'trc_count_2000',
+    'trc_sqm_2000',
+    'cafe_count_2000',
+    'cafe_sum_2000_min_price_avg',
+    'cafe_sum_2000_max_price_avg',
+    'cafe_avg_price_2000',
+    'cafe_count_2000_na_price',
+    'cafe_count_2000_price_500',
+    'cafe_count_2000_price_1000',
+    'cafe_count_2000_price_1500',
+    'cafe_count_2000_price_2500',
+    'cafe_count_2000_price_4000',
+    'cafe_count_2000_price_high',
+    'big_church_count_2000',
+    'church_count_2000',
+    'mosque_count_2000',
+    'leisure_count_2000',
+    'sport_count_2000',
+    'market_count_2000',
+    'green_part_3000',
+    'prom_part_3000',
+    'office_count_3000',
+    'office_sqm_3000',
+    'trc_count_3000',
+    'trc_sqm_3000',
+    'cafe_count_3000',
+    'cafe_sum_3000_min_price_avg',
+    'cafe_sum_3000_max_price_avg',
+    'cafe_avg_price_3000',
+    'cafe_count_3000_na_price',
+    'cafe_count_3000_price_500',
+    'cafe_count_3000_price_1000',
+    'cafe_count_3000_price_1500',
+    'cafe_count_3000_price_2500',
+    'cafe_count_3000_price_4000',
+    'cafe_count_3000_price_high',
+    'big_church_count_3000',
+    'church_count_3000',
+    'mosque_count_3000',
+    'leisure_count_3000',
+    'sport_count_3000',
+    'market_count_3000',
+    'green_part_5000',
+    'prom_part_5000',
+    'office_count_5000',
+    'office_sqm_5000',
+    'trc_count_5000',
+    'trc_sqm_5000',
+    'cafe_count_5000',
+    'cafe_sum_5000_min_price_avg',
+    'cafe_sum_5000_max_price_avg',
+    'cafe_avg_price_5000',
+    'cafe_count_5000_na_price',
+    'cafe_count_5000_price_500',
+    'cafe_count_5000_price_1000',
+    'cafe_count_5000_price_1500',
+    'cafe_count_5000_price_2500',
+    'cafe_count_5000_price_4000',
+    'cafe_count_5000_price_high',
+    'big_church_count_5000',
+    'church_count_5000',
+    'mosque_count_5000',
+    'leisure_count_5000',
+    'sport_count_5000',
+    'market_count_5000')
+
+```
+
+```{r}
+find_raion_features <- function(overall_data)
+{
+    raion_specified_features <- c()
+    raion_unspecified_features <- c()
+    for (col in names(overall_data)) {
+        broke <- FALSE
+        print(sprintf('  %s', col))
+        for (r in levels(overall_data$sub_area)) {
+            s <- subset(overall_data, sub_area == r)
+            #print(sprintf('  %s: %s', col, r))
+            if (any(!is.na(s[,col]))) {
+                if (is.numeric(s[,col])) {
+                    if (min(s[,col], na.rm=TRUE) != max(s[,col], na.rm=TRUE)) {
+                        print(sprintf('%s in %s: min %f vs max %f', col, r, min(s[,col], na.rm=TRUE), max(s[,col], na.rm=TRUE)))
+                        raion_unspecified_features <- c(raion_unspecified_features, col)
+                        broke <- TRUE
+                        break
+                    }
+                } else {
+                    if (length(unique(s[,col])) != 1) {
+                        print(sprintf('%s in %s: unique fields > 1', col, r, length(unique(s[,col]))))
+                        raion_unspecified_features <- c(raion_unspecified_features, col)
+                        broke <- TRUE
+                        break
+                    }
+                }
+            }
+        }
+        if (!broke) {
+            raion_specified_features <- c(raion_specified_features, col)
+        }
+    }
+    write.csv(raion_specified_features, file=-'raion_specified_features.csv', row.names=FALSE)
+    write.csv(raion_unspecified_features, file='raion_unspecified_features.csv', row.names=FALSE)
+}
+```
+
+
+## Cleanup raion features
+
+```{r make_raion_data}
+raion_specified_features <- as.vector(read.csv('raion_specified_features.csv')[,1])
+raion_specified_features <- unique(c('sub_area', raion_specified_features)) # didn't always include sub_area.
+
+# slim raion data down into one row per raion so it is all imputed consistently.
+raion_data <- unique(overall_data[,raion_specified_features])
+# confirm
+stopifnot(nrow(raion_data) == length(unique(raion_data$sub_area)))
+```
+
+
+### Fix "all" columns
+
+As mentioned on the forums, the full_all columns are bad.
+
+```{r}
+qplot(raion_popul, full_all, data=raion_data)+geom_abline(slope=1, intercept=0)
+```
+
+Crib from Josep Garriga's post [https://www.kaggle.com/aralai/full-all-vs-raion-popul/notebook]
+
+
+
+
+```{r}
+raion_data$district <- NA
+raion_data[which(raion_data$sub_area %in% c('Krjukovo','Matushkino','Silino','Savelki','Staroe Krjukovo')),"district"]='Górod Zelenograd'
+raion_data[which(raion_data$sub_area %in% c(
+  'Golovinskoe','Koptevo','Vostochnoe Degunino','Dmitrovskoe','Timirjazevskoe',
+  'Hovrino','Zapadnoe Degunino','Beskudnikovskoe','Ajeroport','Vojkovskoe',
+  'Savelovskoe','Sokol','Horoshevskoe','Levoberezhnoe','Begovoe','Molzhaninovskoe')),"district"]='Séverny administrativny ókrug'
+raion_data[which(raion_data$sub_area %in% c(
+  'Mar\'ino','Vyhino-Zhulebino','Ljublino','Kuz\'minki','Rjazanskij','Tekstil\'shhiki',
+  'Lefortovo','Pechatniki','Juzhnoportovoe','Nizhegorodskoe','Kapotnja','Nekrasovka')),"district"]='Yugo-Vostochny administrativny ókrug'
+raion_data[which(raion_data$sub_area %in% c(
+  'Otradnoe','Bibirevo','Severnoe Medvedkovo','Jaroslavskoe','Babushkinskoe','Juzhnoe Medvedkovo',
+  'Losinoostrovskoe','Lianozovo','Alekseevskoe','Butyrskoe','Mar\'ina Roshha','Ostankinskoe',
+  'Sviblovo','Altuf\'evskoe','Rostokino','Severnoe','Marfino')),"district"]='Sévero-Vostochny administrativny ókrug'
+raion_data[which(raion_data$sub_area %in% c(
+  'Gol\'janovo','Perovo','Ivanovskoe','Veshnjaki','Bogorodskoe','Novokosino','Izmajlovo',
+  'Novogireevo','Sokolinaja Gora','Severnoe Izmajlovo','Preobrazhenskoe','Vostochnoe Izmajlovo',
+  'Kosino-Uhtomskoe','Sokol\'niki','Metrogorodok','Vostochnoe')),"district"]='Vostochny administrativny ókrug'
+raion_data[which(raion_data$sub_area %in% c(
+  'Orehovo-Borisovo Juzhnoe','Birjulevo Vostochnoe','Chertanovo Juzhnoe','Zjablikovo',
+  'Orehovo-Borisovo Severnoe','Caricyno','Nagatinskij Zaton','Chertanovo Central\'noe',
+  'Chertanovo Severnoe','Brateevo','Danilovskoe','Birjulevo Zapadnoe','Nagornoe',
+  'Nagatino-Sadovniki','Moskvorech\'e-Saburovo','Donskoe')),"district"]='Yuzhny administrativny ókrug'
+raion_data[which(raion_data$sub_area %in% c(
+  'Poselenie Shherbinka','Poselenie Desjonovskoe','Poselenie Vnukovskoe','Poselenie Sosenskoe',
+  'Poselenie Voskresenskoe','Poselenie Kokoshkino','Poselenie Moskovskij','Poselenie Rjazanovskoe',
+  'Poselenie Marushkinskoe','Poselenie Filimonkovskoe','Poselenie Mosrentgen')),"district"]='Novomoskovsky administrativny okrug'
+raion_data[which(raion_data$sub_area %in% c(
+  'Troickij okrug','Poselenie Kievskij','Poselenie Voronovskoe','Poselenie Krasnopahorskoe',
+  'Poselenie Novofedorovskoe','Poselenie Mihajlovo-Jarcevskoe','Poselenie Rogovskoe',
+  'Poselenie Pervomajskoe','Poselenie Klenovskoe','Poselenie Shhapovskoe')),"district"]='Troitsky administrativny okrug'
+raion_data[which(raion_data$sub_area %in% c(
+  'Juzhnoe Butovo','Jasenevo','Kon\'kovo','Teplyj Stan','Zjuzino','Akademicheskoe',
+  'Cheremushki','Severnoe Butovo','Lomonosovskoe','Obruchevskoe','Gagarinskoe','Kotlovka')),"district"]='Yugo-Západny administrativny ókrug'
+raion_data[which(raion_data$sub_area %in% c(
+  'Kuncevo','Mozhajskoe','Ramenki','Ochakovo-Matveevskoe','Solncevo','Troparevo-Nikulino',
+  'Fili Davydkovo','Novo-Peredelkino','Filevskij Park','Krylatskoe','Dorogomilovo',
+  'Prospekt Vernadskogo','Vnukovo')),"district"]='Západny administrativny ókrug'
+raion_data[which(raion_data$sub_area %in% c(
+  'Mitino','Horoshevo-Mnevniki','Severnoe Tushino','Strogino','Shhukino',
+  'Juzhnoe Tushino','Pokrovskoe Streshnevo','Kurkino')),"district"]='Sévero-Západny administrativny ókrug'
+raion_data[which(raion_data$sub_area %in% c(
+  'Presnenskoe','Taganskoe','Basmannoe','Hamovniki','Tverskoe', 'Meshhanskoe',
+  'Zamoskvorech\'e','Krasnosel\'skoe','Arbat','Jakimanka')),"district"]='Tsentralny administrativny ókrug'
+
+raion_data$district <- factor(raion_data$district)
+raion_data$raion_popul_male <- with(raion_data, young_male+work_male+ekder_male)
+raion_data$raion_popul_female <- with(raion_data, young_female+work_female+ekder_female)
+
+district <- raion_data %>%
+  group_by(district) %>%
+  summarize(full_all=sum(raion_popul),
+            male_f=sum(raion_popul_male),
+            female_f=sum(raion_popul_female))
+
+raion_data$full_all <- NULL
+raion_data$male_f <- NULL
+raion_data$female_f <- NULL
+
+raion_data <- merge(raion_data, district, by='district')
+```
+
+
+
+
+### Look at columns
+
+```{r}
+for (col in names(raion_data)[-1]) {
+    x <- raion_data[,col]
+    e <- ecdf(x)
+    p <- qplot(x, e(x))+ggtitle(sprintf("Distribution of %s across raions", col))
+    print(p)
+}
+```
+
+
+### Drop columns with only a few non-NA values
+
+If there were columns where most values were NA and only a few non-NAs, drop those columns.
+(In fact, there are no such columns.)
+```{r}
+non_NAs <- sapply(names(raion_data), function(col) { sum(!is.na(raion_data[,col])) })
+raion_data <- sans_cols(raion_data, names(raion_data)[non_NAs < 4])
+```
+
+### Handle NAs before making other features
+
+```{r}
+raion_trainers <- c(
+    add_is_na=fe_add_isna_col_factory,
+    impute=na_impute_factory
+    )
+```
+
+## Feature Engineering
+
+### Misc ratios
+
+```{r raion_misc_fe}
+raion_trainers <- c(raion_trainers, misc_fe=function(train_data) {
+    return(function(data)
+        {
+        data$pop_per_kmsq <- with(data, raion_popul / (area_m / 1000 / 1000))
+        data$children_preschool_perpop <- with(data, children_preschool / raion_popul)
+        data$children_school_perpop <- with(data, children_school / raion_popul)
+        data$children_preschool_per_quota <- with(data, inf_to_2max(children_preschool / preschool_quota))
+        data$children_school_per_quota <- with(data, inf_to_2max(children_school / school_quota))
+        data$children_per_school <- with(data, inf_to_2max(children_school / school_education_centers_raion))
+        data$top_20_schools_pct <- with(data, inf_to_2max(ifelse(school_education_centers_top_20_raion > 0, school_education_centers_top_20_raion / school_education_centers_raion, 0)))
+        return(data)
+    })
+})
+```
+
+
+### Population columns
+
+```{r raion_population_fe}
+
+raion_trainers <- c(raion_trainers, population_fe=function(train_data) {
+    raion_pop_cols <- setdiff(grep('_all|_male|_female', names(train_data), value=TRUE), 'full_all')
+    return (fe_ratios_factory('raion_popul', raion_pop_cols))
+})
+```
+
+
+### Building material columns
+
+```{r raion_building_material_fe}
+
+raion_trainers <- c(raion_trainers, building_materials_fe=function(train_data) {
+    raion_building_material_cols <- c(
+        "build_count_block",
+        "build_count_wood", 
+        "build_count_frame",
+        "build_count_brick", 
+        "build_count_monolith",
+        "build_count_panel", 
+        "build_count_foam",
+        "build_count_slag",
+        "build_count_mix"
+        )
+    return(fe_ratios_factory('raion_build_count_with_material_info', raion_building_material_cols))
+})
+```
+
+
+### Building build year columns
+
+
+```{r raion_building_years_fe}
+raion_trainers <- c(raion_trainers, building_years_fe=function(train_data) {
+    raion_building_year_cols <- c(
+        "build_count_before_1920",
+        "build_count_1921.1945", 
+        "build_count_1946.1970",
+        "build_count_1971.1995", 
+        "build_count_after_1995"
+        )
+    return (fe_ratios_factory('raion_build_count_with_builddate_info', raion_building_year_cols))
+})
+```
+
+
+# PCA to reduce correlations
+
+```{r pca_trainer}
+raion_pca <- c(pca=function(train_data)
+{
+    pca_predictor <- caret::preProcess(train_data, method='pca')
+    return(function(data) {
+        return (predict(pca_predictor, data))
+    })        
+})
+
+```
+# Apply trainers and transform data
+
+```{r apply_transformers}
+# district is a problem.
+# temporarily remove
+dr <- raion_data[,c('sub_area', 'district')]
+raion_data_fe <- transform_data(raion_trainers, sans_cols(raion_data, 'district'), verbose=TRUE)
+raion_data_fe <- merge(raion_data_fe, dr, by='sub_area')
+raion_data_fe$district <- factor(raion_data_fe$district)
+
+save(raion_data_fe, file='raion_data_fe.Rdata')
+write.csv(raion_data_fe, file='raion_data_fe.csv', row.names=FALSE)
+
+```

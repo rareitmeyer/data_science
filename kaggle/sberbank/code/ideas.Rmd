@@ -1,0 +1,4 @@
+# Ideas
+
+Irina recommends looking at Amelia package for imputation.
+And suggests reading "datasciencecentral.com"

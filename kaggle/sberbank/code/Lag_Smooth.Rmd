@@ -1,0 +1,306 @@
+---
+title: "Smoothed Lag"
+author: "R. A. Reitmeyer"
+date: "2017-06-12"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+set.seed(20170630)
+
+library(stringr)
+library(ggplot2)
+
+```
+
+```{r}
+source('common.R')
+
+predict_col <- 'price_doc'
+load('model3_overall_data_fe.Rdata')
+
+# transform predictions
+just_col(overall_data_fe, predict_col) <- log1p(just_col(overall_data_fe, predict_col))
+
+```
+
+## Y aware PCA, revisited
+
+Consider playing around with Y-Aware PCA again, this time without the is-na columns. Or not.
+
+```{r}
+
+
+pipeline <- c(yaware_pca=function(train_data) {
+    isna_cols <- grep('_isna$', names(train_data), value=TRUE)
+    
+    pca_fn <- yaware_pca_factory(sans_cols(train_data, isna_cols), 0.999)
+    function(data) {
+        isna_data <- just_cols(data, isna_cols)
+        print(dim(isna_data))
+        retval <- pca_fn(sans_cols(data, isna_cols))
+        return(list(retval=retval, isna_data=isna_data))
+        print(class(retval))
+        print(names(retval))
+        print(dim(retval))
+        retval <- cbind(retval, isna_data)
+        return (retval)
+    }
+})
+
+skipcols <- c('id', 'disposition')
+
+# Don't do this unless playing around.
+if (FALSE) {
+    overall_data_pca <- transform_data(pipeline,
+               subset(overall_data_fe, disposition=='train'),
+               subset(overall_data_fe, disposition!='skip'),
+               verbose=TRUE
+               )[[2]]
+}
+```
+## Look at Smoothed predictors, lag
+
+Load the maro data and make some "smoothed" columns by exponential
+filtering (simplest smoother without foreknowledge).
+
+
+```{r}
+set.seed(20170630)
+load('macro_preproc2.Rdata')
+just_buyer <- subset(overall_data_fe, product_type == 'OwnerOccupier')
+just_buyer_nonmacro <- sans_cols(just_buyer, names(macro_preproc2))
+
+ctrl <- caret::trainControl(method='repeatedcv',
+             number=5,
+             allowParallel=TRUE)
+grid <- expand.grid(
+    nrounds=750,
+    eta=c(0.03),
+    gamma=1,
+    max_depth=c(8),
+    subsample=c(0.7),
+    colsample_bytree=c(0.6),
+    min_child_weight=1
+)
+
+skipcols <- c('id', 'disposition')
+x_static <- model.matrix(~., data=sans_cols(just_disposition(just_buyer_nonmacro, 'train'), c(predict_col, skipcols)))
+y_static <- just_col(just_disposition(just_buyer_nonmacro, 'train'), predict_col)
+y_date_id <- just_cols(just_disposition(just_buyer, 'train'), c(predict_col, 'id', 'timestamp'))
+xgb_model_static <- caret::train(
+    x=x_static,
+    y=y_static,
+    method='xgbTree',
+    metric="RMSE",
+    trControl=ctrl,
+    tuneGrid=grid)
+y_pred <- predict(xgb_model_static, x_static)
+y_date_id$y_error <- y_pred - y_static
+save(x_static, y_static, xgb_model_static, y_date_id, file='Lag_Smooth_static.Rdata')
+
+
+library(pracma)
+
+# function to smooth an input column and lag it various amounts.
+sl <- function(macro_data, colname, s=30, l=0:3, date_colname='timestamp')
+{
+    stopifnot(all(order(just_col(macro_data, date_colname)) == 1:nrow(macro_data)))
+    retval <- data.frame(just_cols(macro_data, date_colname))
+    names(retval) <- date_colname
+    
+    for (si in s) {
+        if (si > 1) {
+            ma <- pracma::movavg(just_col(macro_data, colname), si, 's')
+        } else {
+            ma <- just_col(macro_data, colname)
+        }
+        ma_l <- length(ma)
+        for (li in l) {
+            new_colname <- sprintf('%s_s%d_l%d', colname, si, li)
+            just_col(retval, new_colname) <- c(rep(ma[1], li), ma[1:(ma_l-li)])
+        }
+    }
+    return (retval)
+}
+
+
+make_cors <- function(sl_data)
+{
+    
+    sl_cols <- str_match(names(sl_data), '^(.*)_s([0-9]+)_l([0-9]+)$')
+    sl_cols <- sl_cols[!is.na(sl_cols[,1]),]
+
+    retval <- data.frame(
+        colname=as.character(sl_cols[,2]),
+        smooth=as.numeric(sl_cols[,3]),
+        lag=as.numeric(sl_cols[,4]),
+        m=as.vector(sapply(
+            just_cols(sl_data, as.character(sl_cols[,1])),
+            function(x) {
+                cor(sl_data$y_error, x-mean(x))
+            }
+        )))
+    return (retval)
+}
+
+smooths <- c(0,30,60,90,180,360)
+lags <- 0:800
+
+# Examine a handful of indicators.
+x_oil_urals <- merge(y_date_id, sl(macro_preproc2, 'oil_urals', s=smooths, l=lags), by='timestamp')
+cor_oil_urals <- make_cors(x_oil_urals)
+ggplot(aes(x=lag, y=m, color=factor(smooth)), data=subset(cor_oil_urals, smooth/2+lag < 720))+geom_line()+xlab('Lag (days)')+ylab('Correlation')+ggtitle('Correlation of oil_urals for various smooths, lags')
+
+x_rts <- merge(y_date_id, sl(macro_preproc2, 'rts', s=smooths, l=lags), by='timestamp')
+cor_rts <- make_cors(x_rts)
+ggplot(aes(x=lag, y=m, color=factor(smooth)), data=subset(cor_rts, smooth/2+lag < 720))+geom_line()+xlab('Lag (days)')+ylab('Correlation')+ggtitle('Correlation of rts for various smooths, lags')
+
+x_micex <- merge(y_date_id, sl(macro_preproc2, 'micex', s=smooths, l=lags), by='timestamp')
+cor_micex <- make_cors(x_micex)
+ggplot(aes(x=lag, y=m, color=factor(smooth)), data=subset(cor_micex, smooth/2+lag < 720))+geom_line()+xlab('Lag (days)')+ylab('Correlation')+ggtitle('Correlation of micex for various smooths, lags')
+
+x_rent_price_2room_eco <- merge(y_date_id, sl(macro_preproc2, 'rent_price_2room_eco', s=smooths, l=lags), by='timestamp')
+cor_rent_price_2room_eco <- make_cors(x_rent_price_2room_eco)
+ggplot(aes(x=lag, y=m, color=factor(smooth)), data=subset(cor_rent_price_2room_eco, smooth/2+lag < 720))+geom_line()+xlab('Lag (days)')+ylab('Correlation')+ggtitle('Correlation of rent_price_2room_eco for various smooths, lags')
+
+x_rent_price_2room_bus <- merge(y_date_id, sl(macro_preproc2, 'rent_price_2room_bus', s=smooths, l=lags), by='timestamp')
+cor_rent_price_2room_bus <- make_cors(x_rent_price_2room_bus)
+ggplot(aes(x=lag, y=m, color=factor(smooth)), data=subset(cor_rent_price_2room_bus, smooth/2+lag < 720))+geom_line()+xlab('Lag (days)')+ylab('Correlation')+ggtitle('Correlation of rent_price_2room_bus for various smooths, lags')
+
+x_salary <- merge(y_date_id, sl(macro_preproc2, 'salary', s=smooths, l=lags), by='timestamp')
+cor_salary <- make_cors(x_salary)
+ggplot(aes(x=lag, y=m, color=factor(smooth)), data=subset(cor_salary, smooth/2+lag < 720))+geom_line()+xlab('Lag (days)')+ylab('Correlation')+ggtitle('Correlation of salary for various smooths, lags')
+
+plot(x_rent_price_2room_eco$rent_price_2room_eco_s0_l0)
+plot(x_rent_price_2room_eco$rent_price_2room_eco_s180_l400)
+plot(x_rent_price_2room_eco$price_doc)
+qplot(y_pred, y_error, data=y_date_id, alpha=I(0.1))
+qplot(rent_price_2room_eco_s0_l0, y_error, data=x_rent_price_2room_eco)
+qplot(rent_price_2room_eco_s180_l0, y_error, data=x_rent_price_2room_eco)
+```
+
+### Examine en masse
+
+```{r}
+
+make_all_cors_from_data <- function(y_date_id, macro_data, smooths, lags, merge_col='timestamp')
+{
+    retval <- NULL
+    for (col in names(macro_data)) {
+        if (is.numeric(just_col(macro_data, col))) {
+            x <- merge(y_date_id, sl(macro_data, colname=col, s=smooths, l=lags), by=merge_col)
+            retval <- rbind(retval, make_cors(x))
+        }
+    }
+    return (retval)
+}
+
+all_cors <- make_all_cors_from_data(y_date_id, macro_preproc2, smooths, lags)
+
+make_plots_from_cors <- function(cors)
+{
+    colnames <- levels(cors$colname)
+    for (col in colnames) {
+        p <- ggplot(aes(x=lag, y=m, color=factor(smooth)), data=subset(cors, colname==col & smooth/2+lag <720))+geom_line()+ggtitle(sprintf('y_error correlations of %s for smooths at lags', col))+ylab('correlation')+xlab('lag (days)')
+        print(p)
+    }
+}
+
+make_plots_from_cors(all_cors)
+```
+   
+## Find best correlations for each column
+
+Look for the best correlations. Exclude smoothing less than 30 days as more likely to be noise than signal.
+        
+```{r}
+all_cors_sorted <- all_cors[order(abs(all_cors$m),decreasing=TRUE),]
+best_per_colname <- all_cors_sorted[sapply(levels(all_cors_sorted$colname), function(col) { i <- min(which(with(all_cors_sorted, colname==col & smooth >= 30 & smooth/2+lag < 360)))}),]
+
+sl_from_df <- function(macro_data, df, date_colname='timestamp')
+{
+    stopifnot(all(order(just_col(macro_data, date_colname)) == 1:nrow(macro_data)))
+    retval <- data.frame(just_cols(macro_data, date_colname))
+    names(retval) <- date_colname
+
+    colnames <- as.character(just_col(df, 'colname'))
+    smooths <- just_col(df, 'smooth')
+    lags <- just_col(df, 'lag')
+    for (i in 1:nrow(df)) {
+        colname <- colnames[i]
+        si <- smooths[i]
+        li <- lags[i]
+        if (si > 1) {
+            ma <- pracma::movavg(just_col(macro_data, colname), si, 's')
+        } else {
+            ma <- just_col(macro_data, colname)
+        }
+        ma_l <- length(ma)
+        new_colname <- sprintf('%s_s%d_l%d', colname, si, li)
+        just_col(retval, new_colname) <- c(rep(ma[1], li), ma[1:(ma_l-li)])
+
+    }
+    return (retval)
+}
+
+
+macro_best_sl <- merge(y_date_id, sl_from_df(macro_preproc2, best_per_colname), by='timestamp')
+save(macro_best_sl, y_date_id, y_pred, file='Lag_Smooth_macro_best_sl.Rdata')
+
+```
+
+## Fit linear model or two using lagged coefficients
+
+```{r}
+data_dynamic <- sans_cols(macro_best_sl, c(predict_col, 'id'))
+m_dynamic <- lm(y_error ~ ., data=data_dynamic)
+print(summary(m_dynamic))
+
+cf <- summary(m_dynamic)$coefficients
+data_dynamic2 <- just_cols(data_dynamic, c('y_error', setdiff(row.names(cf[cf[,4]<0.10,]), '(Intercept)')))
+m_dynamic2 <- lm(y_error ~ ., data=data_dynamic2)
+print(summary(m_dynamic2))
+                                             
+cf2 <- summary(m_dynamic2)$coefficients
+data_dynamic3 <- just_cols(data_dynamic2, c('y_error', setdiff(row.names(cf2[cf2[,4]<0.10,]), '(Intercept)')))
+m_dynamic3 <- lm(y_error ~ ., data=data_dynamic3)
+print(summary(m_dynamic3))
+
+y_error_pred_lm <- predict(m_dynamic3, data=data_dynamic3)
+y_date_id$y_best_est_lm <- y_pred - y_error_pred_lm
+
+save(data_dynamic, data_dynamic2, data_dynamic3, m_dynamic, m_dynamic2, m_dynamic3, y_date_id, file='Lag_Smooth_dynamic_lm.Rdata')
+```
+
+
+## Fit XGBoost model using lagged data to residuals
+
+
+```{r}
+x_dynamic <- model.matrix(~., data=sans_cols(macro_best_sl, c(predict_col, 'y_error', 'id')))
+y_dynamic <- just_col(macro_best_sl, 'y_error')
+
+
+xgb_model_dynamic <- caret::train(
+    x=x_dynamic,
+    y=y_dynamic,
+    method='xgbTree',
+    metric="RMSE",
+    trControl=ctrl,
+    tuneGrid=grid)
+y_error_pred <- predict(xgb_model_dynamic, x_dynamic)
+y_date_id$y_best_est_xgb <- y_pred - y_error_pred
+
+qplot(y_error_pred,y_date_id$y_error, alpha=I(0.1))
+save(x_dynamic, y_dynamic, xgb_model_dynamic, y_date_id, file='Lag_Smooth_dynamic_xgb.Rdata')
+
+fi <- xgb.importance(feature_names=colnames(x_dynamic), model=xgb_model_dynamic$finalModel)
+fi <- fi[!is.na(fi$Feature),]
+fi_nrow <- nrow(fi)
+
+print(fi[1:min(fi_nrow,50),])
+xgb.plot.importance(fi[1:min(fi_nrow,20),])
+      
+```

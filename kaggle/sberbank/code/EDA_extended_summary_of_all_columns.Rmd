@@ -1,0 +1,77 @@
+# EDA: Extended summary of all columns
+
+I like to look at the columns in a competition, with more detail than the R
+summary function provides.
+
+
+## Code
+
+In hope it helps others, here is an R function to provide extra detail.
+
+```{r}
+# Summarize a data frame. Shows the (first) class, the number of
+# unique levels, the min and max, as well as median and hinges
+# (quartiles).  For non-numeric columns (EG, character, factors) the
+# mean, median and hinges do not make sense, but this function can and
+# will still show min and max.  Beware: this will turn the min/max
+# output into strings for the numeric columns too, since R wants
+# eveything in a column to have the same type!
+
+df.nlevels <- function(data)
+{
+    do.call(rbind,lapply(names(data),function(x){
+        klass <- class(data[,x])[[1]]
+        retval <- data.frame(name=x, klass=klass, nlevels=length(unique(data[,x])), NAs=sum(is.na(data[,x])), mean=NA, min=NA, lower.hinge=NA, median=NA, upper.hinge=NA, max=NA)
+        if (klass %in% c('integer', 'numeric','POSIXct')) {
+            retval[,'mean'] <- mean(data[,x],na.rm=TRUE)
+            retval[,6:10] <- fivenum(data[,x],na.rm=TRUE)
+        } else if (klass %in% c('character')) {
+            retval[,'min'] <- min(data[,x], na.rm=TRUE)
+            retval[,'max'] <- max(data[,x], na.rm=TRUE)
+        } else if (klass %in% c('factor','ordered')) {
+            lvls <- levels(data[,x])
+            retval[,'min'] <- lvls[1]
+            retval[,'max'] <- lvls[length(lvls)]
+        }
+        return(retval)
+    }))
+}
+```
+
+
+## Results
+
+Of course, a function isn't helpful until you use it to look at the
+results. I'm sorry so many columns wrap here. I suggest a spreadsheet
+program to view the CSV.
+
+
+```{r, echo=FALSE}
+# Boilerplate load data code
+
+input_dir = '../input'
+input_filename <- function(name, dir=input_dir) {
+    file.path(input_dir, name)
+}
+predict_col <- 'price_doc'
+macro <- read.csv(input_filename('macro.csv'))
+overall_train <- merge(read.csv(input_filename('train.csv')), macro, by='timestamp')
+
+# set seed as contest completion date for repeatability
+set.seed(20170529)
+
+# Break overall_train into three sets, train, validate and test
+# as 60:20:20 split
+library(caret)
+train_idx <- caret::createDataPartition(overall_train[,predict_col], p=0.6, list=FALSE)
+train <- overall_train[train_idx,]
+non_train <- overall_train[-c(train_idx),]
+validation_idx <- caret::createDataPartition(non_train[,predict_col], p=0.5, list=FALSE)
+validation <- non_train[validation_idx,]
+test <- non_train[-c(validation_idx),]
+```
+
+```{r}
+(train_summary <- df.nlevels(train))
+write.csv(train_summary, file='train_summary.csv', row.names=FALSE)
+```

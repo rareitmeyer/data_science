@@ -1,0 +1,229 @@
+---
+title: "model3"
+author: "R. A. Reitmeyer"
+date: "2017-05-29"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+source('common.R')
+```
+
+## Prerequisites
+
+This assumes
+* macro data from model2.Rmd (TODO: clean up and rename this)
+* raion data from Raion_Features.Rmd
+* adversarial validation data from validation.Rmd
+
+
+## Assemble data
+
+```{r}
+predict_col <- 'price_doc'
+load('overall_train_ids_by_testprob.Rdata') # loads overall_train_ids_by_testprob
+load('raion_data_fe.Rdata') # loads raion_data_fe
+if (class(raion_data_fe) == 'list') {
+    stopifnot(length(raion_data_fe) == 1)
+    raion_data_fe <- raion_data_fe[[1]]
+}
+load('macro_preproc2.Rdata') # loads macro_preproc2
+
+train <- read.csv(input_filename('train.csv'))
+train$timestamp <- as.POSIXct(train$timestamp)
+test <- read.csv(input_filename('test.csv'))
+test$timestamp <- as.POSIXct(test$timestamp)
+
+overall_train <- merge(train, macro_preproc2, by='timestamp')
+overall_test <- merge(cbind(test, price_doc=NA), macro_preproc2, by='timestamp')
+overall_data <- rbind(cbind(overall_train, istrain=TRUE),
+                      cbind(overall_test, istrain=FALSE))
+
+# drop columns already in raion_data_fe and use those instead
+raion_data_key <- 'sub_area'
+cols_from_raion <- setdiff(names(raion_data_fe), raion_data_key)
+overall_data <- merge(sans_cols(overall_data, cols_from_raion), raion_data_fe, by=raion_data_key)
+```
+
+## Break into train / test / validation / submission data sets.
+
+Use adversarial validation results to partition into four data sets, in that order
+
+```{r}
+
+# Partition data into four data sets, train / test / validation and submission, based
+# on validation data (assumed to have a testprob column) and a istrain column. Returns
+# a list with data sets in that order. Use min_testprob to exclude data unlikely to
+# be in the submission set from the test/train sets.
+partition_data <- function(overall_data, validation_data, set_sizes=c(0.6, 0.2, 0.2), min_testprob=0.001, seed=20170630)
+{
+    stopifnot(sum(set_sizes) == 1)
+    overall_data <- merge(overall_data, validation_data, all.x=TRUE)
+    overall_data$disposition <- NA
+    
+    submission_data_idx <- which(overall_data$istrain == FALSE)
+    overall_data$disposition[submission_data_idx] <- 'submission'
+    skip_data_idx <- which(overall_data$istrain == TRUE & overall_data$testprob < min_testprob)
+    overall_data$disposition[skip_data_idx] <- 'skip'
+    
+    n <- sum(is.na(overall_data$disposition))
+    print(n)
+    overall_train_data_idx <- order(overall_data$testprob, decreasing=TRUE, na.last=TRUE)
+    validation_test_data_idx <- overall_train_data_idx[1:(n*(set_sizes[2]+set_sizes[3]))]
+    train_data_idx <- overall_train_data_idx[(n*(set_sizes[2]+set_sizes[3])+1):n]
+    set.seed(seed)
+    test_data_idx <- sample(validation_test_data_idx, n*set_sizes[2])
+    validation_data_idx <- setdiff(validation_test_data_idx, test_data_idx)
+    
+    #print(length(overall_train_data_idx))
+    #print(length(validation_test_data_idx))
+    #print(length(train_data_idx))
+    #print(length(test_data_idx))
+    #print(length(validation_data_idx))
+    
+    stopifnot(all(is.na(overall_data$disposition[train_data_idx])))
+    overall_data$disposition[train_data_idx] <- 'train'
+    stopifnot(all(is.na(overall_data$disposition[test_data_idx])))
+    overall_data$disposition[test_data_idx] <- 'test'
+    stopifnot(all(is.na(overall_data$disposition[validation_data_idx])))
+    overall_data$disposition[validation_data_idx] <- 'validation'
+
+    # assign any points that might have been missed due to rounding to the train set
+    overall_data$disposition[is.na(overall_data$disposition)] <- 'train'
+    
+    # drop istrain, as it is redundant now.
+    overall_data$istrain <- NULL
+    overall_data$testprob <- NULL
+    
+    return (overall_data)
+}
+
+overall_data <- partition_data(overall_data, overall_train_ids_by_testprob, min_testprob=0.05)
+print(summary(factor(overall_data$disposition)))
+```
+
+
+# Mark NAs
+```{r}
+
+# Handle NAs in data. Add is_na columns for everything without worrying about disposition,
+# but respect train vs others for other preprocessing.
+overall_data <- fe_add_isna_col_factory(overall_data, skipcols=predict_col)(overall_data)
+save(overall_data, file='model3_overall_data.Rdata')
+```
+
+
+# Make and apply pipeline for additional transformations
+
+```{r}
+pipeline <- c(drop_nzv=function(train_data) {
+    fe_drop_nzv_cols_factory(train_data, keep_cols=c(predict_col, 'disposition', 'id'))
+})
+pipeline <- c(pipeline, impute=function(train_data) {
+    na_impute_factory(
+        train_data, predict_col=predict_col, 
+        drop_cols=c('disposition'), 
+        impute_on_just_na_cols=TRUE,
+        extra_na_cols=NA_colnames(overall_data))
+})
+pipeline <- c(pipeline, scale=function(train_data) {
+    scale_preprocessor_factory(train_data, predict_col=predict_col, 
+                               drop_cols=c(predict_col, 'id','disposition'))
+})
+
+# fix the data
+overall_data_fe <- transform_data(pipeline,
+               subset(overall_data, disposition=='train'),
+               subset(overall_data, disposition!='skip'),
+               verbose=TRUE,
+               predict_col=predict_col
+)[[2]]
+
+save(overall_data_fe, file='model3_overall_data_fe.Rdata')
+```
+
+
+# Model
+
+```{r}
+library(Matrix)
+library(xgboost)
+
+# slim down memory usage
+rm(list=ls())
+gc()
+
+source('common.R')
+predict_col <- 'price_doc'
+load('model3_overall_data_fe.Rdata')
+
+# transform predictor for contest.
+just_col(overall_data_fe, predict_col) <- log1p(as.integer(just_col(overall_data_fe, predict_col)))
+
+train_X <- to_X(just_disposition(overall_data_fe, 'train'), label_col=predict_col)
+test_X <- to_X(just_disposition(overall_data_fe, 'test'), label_col=predict_col)
+validation_X <- to_X(just_disposition(overall_data_fe, 'validation'), label_col=predict_col)
+submission_X <- to_X(sans_cols(just_disposition(overall_data_fe, 'submission'), predict_col))
+
+# XGBoost parameters
+param <- list(objective="reg:linear",
+              eval_metric = "rmse",
+              eta = .02,
+              gamma = 1,
+              max_depth = 4,
+              min_child_weight = 1,
+              subsample = .7,
+              colsample_bytree = .5
+)
+
+rounds = 300
+xgb_model <- xgb.train(data = train_X$X,
+                       params = param,
+                       watchlist = list(train = train_X$X),
+                       nrounds = rounds,
+                       verbose = 0,
+                       print.every.n = 25
+)
+
+```
+## Top Features
+
+Look at the top feature importances.
+
+```{r}
+
+fi <- xgb.importance(train_X$names, model=xgb_model)
+head(fi,10)
+
+xgb.plot.importance(fi[1:10,])
+```
+
+## Validation
+
+```{r}
+score_fn <- function(actual, predicted, data_is_log1_already=TRUE)
+{
+  return (sqrt(1/length(actual)*sum((actual-predicted)^2)))
+}
+train_preds <- predict(xgb_model, train_X$X)
+print(sprintf('train score: %f', score_fn(just_col(subset(overall_data_fe, disposition=='train'),predict_col),train_preds)))
+
+test_preds <- predict(xgb_model, test_X$X)
+print(sprintf('test score: %f', score_fn(just_col(subset(overall_data_fe, disposition=='test'),predict_col),test_preds)))
+
+valid_preds <- predict(xgb_model, validation_X$X)
+print(sprintf('validation score: %f', score_fn(just_col(subset(overall_data_fe, disposition=='validation'),predict_col),valid_preds)))
+
+```
+
+
+# submission predictions
+
+```{r}
+
+preds <- predict(xgb_model,submission_X$X)
+preds <- expm1(preds)
+write.csv(data.frame(id=subset(overall_data_fe, disposition=='submission')$id, price_doc=preds), strftime(Sys.time(), "submission_%Y%m%d_%H%M%S.csv"), row.names=FALSE)
+```
